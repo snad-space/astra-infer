@@ -18,6 +18,8 @@ classifiers = [
 dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
+    "numpy",
+    "onnxruntime",
 ]
 
 [project.urls]
