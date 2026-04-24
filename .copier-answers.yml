@@ -1,0 +1,27 @@
+# Changes here will be overwritten by Copier
+_commit: v2.2.0
+_src_path: gh:lincc-frameworks/python-project-template
+author_email: torsha.majumder.work@gmail.com
+author_name: Torsha Majumder
+create_example_module: false
+custom_install: library
+enforce_style:
+- ruff_lint
+- ruff_format
+failure_notification: []
+include_benchmarks: true
+include_docs: true
+include_notebooks: true
+mypy_type_checking: none
+package_name: astra_infer
+project_description: Inference with Astra light-curve embedding models
+project_license: MIT
+project_name: astra_infer
+project_organization: snad-space
+python_versions:
+- '3.10'
+- '3.11'
+- '3.12'
+- '3.13'
+- '3.14'
+test_lowest_version: none
