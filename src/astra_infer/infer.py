@@ -13,15 +13,20 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 BANDS = np.array(["g", "r", "i"])
+"""ZTF photometric bands accepted by the model."""
+
 SEQUENCE_PER_BAND = {"g": 300, "r": 350, "i": 50}
 assert list(BANDS) == list(SEQUENCE_PER_BAND.keys())
 
 SEQUENCE_LENGTH = 700
+"""Total fixed sequence length fed to the model (300 g + 350 r + 50 i)."""
 assert sum(SEQUENCE_PER_BAND.values()) == SEQUENCE_LENGTH
 
 MJD_OFFSET = 58_000.0
+"""MJD subtracted from observation times during normalisation."""
 
 LG_EFF_WAVE = {"g": np.log10(4746.48), "r": np.log10(6366.38), "i": np.log10(7829.03)}
+"""log10 effective wavelength (Å) for each ZTF band."""
 assert list(BANDS) == list(LG_EFF_WAVE.keys())
 
 _DEFAULT_FIELD_NAMES: dict[str, str] = {"time": "time", "mag": "mag", "magerr": "magerr", "band": "band"}
@@ -141,11 +146,15 @@ def _run_session(
 
 @dataclass(frozen=True)
 class Inputs:
-    """Preprocessed light-curve tensors ready for ONNX inference.
+    """Preprocessed ZTF light-curve tensors ready for ONNX inference.
 
+    Holds the four fixed-length arrays that the Astra embedding model expects.
     All arrays share the same batch axis ``N`` (one row per light curve).
     Construct via :func:`preprocess_lc` (single light curve) or
     :func:`preprocess_many` (multiple light curves).
+
+    The model expects photometry in the ZTF *g*, *r*, and *i* bands
+    (see https://www.ztf.caltech.edu for the ZTF photometric system).
 
     Attributes
     ----------
@@ -154,7 +163,7 @@ class Inputs:
     norm_time : ndarray, shape (N, 700, 1)
         MJD times shifted by :data:`MJD_OFFSET`.
     lg_wave : ndarray, shape (N, 700, 1)
-        log10 effective wavelength for each observation's band.
+        log10 effective wavelength (Å) for each observation's ZTF band.
     mask : ndarray, shape (N, 700)
         Padding mask — ``1`` for padded positions, ``0`` for real observations.
     """
@@ -223,18 +232,23 @@ def preprocess_lc(
     *,
     presorted: bool = False,
 ) -> Inputs:
-    """Pre-process a single light curve into ONNX-ready :class:`Inputs`.
+    """Pre-process a single ZTF light curve into ONNX-ready :class:`Inputs`.
+
+    Applies inverse-variance weighted mean subtraction, time normalisation
+    (offset by :data:`MJD_OFFSET`), optional chronological sorting, and
+    per-band clipping / zero-padding to produce fixed-length tensors.
 
     Parameters
     ----------
     time : array-like
         Observation times (MJD).
     mag : array-like
-        Observed magnitudes.
+        PSF magnitudes.
     magerr : array-like
-        Magnitude uncertainties.
+        1-σ magnitude uncertainties.
     band : array-like
-        Band labels — each element must be in ``BANDS``.
+        Band labels — each element must be one of ``{"g", "r", "i"}``
+        (ZTF photometric bands, see https://www.ztf.caltech.edu).
     presorted : bool, optional
         Skip the internal time sort when the input is already sorted.
         Default is ``False``.
@@ -253,7 +267,10 @@ def preprocess_many(
     field_names: dict[str, str] | None = None,
     presorted: bool = False,
 ) -> Inputs:
-    """Pre-process multiple light curves into a single stacked :class:`Inputs`.
+    """Pre-process multiple ZTF light curves into a single stacked :class:`Inputs`.
+
+    Applies the same per-curve preprocessing as :func:`preprocess_lc` to each
+    light curve, then stacks the results along the batch axis.
 
     Accepts either a sequence of ``(time, mag, magerr, band)`` tuples or a
     PyArrow container.  Supported Arrow layouts:
@@ -295,10 +312,12 @@ def preprocess_many(
 
 
 class Infer:
-    """Astra light-curve embedding model.
+    """Astra embedding model for ZTF light curves.
 
     Wraps an ONNX session and exposes a single :meth:`predict` method that
-    accepts preprocessed :class:`Inputs`.
+    accepts preprocessed :class:`Inputs`.  The model was designed for
+    photometry in the ZTF *g*, *r*, and *i* bands
+    (see https://www.ztf.caltech.edu).
 
     Parameters
     ----------

@@ -14,10 +14,11 @@ returning a 512-dimensional embedding vector.
 
 ## Overview
 
-The model expects ZTF-style light curves in three bands: **g**, **r**, and **i**.
-Each call pre-processes the raw observations into fixed-length band sequences
-(300 g + 350 r + 50 i = 700 total), then runs the ONNX model to produce a
-512-dimensional embedding.
+The model is designed for photometry from the
+[Zwicky Transient Facility (ZTF)](https://www.ztf.caltech.edu) in three bands:
+**g**, **r**, and **i**.  Each call pre-processes the raw observations into
+fixed-length band sequences (300 g + 350 r + 50 i = 700 total), then runs the
+ONNX model to produce a 512-dimensional embedding.
 
 Pre-processing steps:
 1. Inverse-variance weighted mean subtraction of magnitudes.
@@ -86,12 +87,12 @@ inputs = preprocess_many(
 
 ## Input format
 
-| Array    | Shape  | Description                                    |
-|----------|--------|------------------------------------------------|
-| `time`   | (n,)   | Observation times in MJD (any numeric dtype)   |
-| `mag`    | (n,)   | PSF magnitudes (any numeric dtype)             |
-| `magerr` | (n,)   | 1-σ magnitude uncertainties (any numeric dtype)|
-| `band`   | (n,)   | Band labels — each element in `{"g","r","i"}`  |
+| Array    | Shape  | Description                                                    |
+|----------|--------|----------------------------------------------------------------|
+| `time`   | (n,)   | Observation times in MJD (any numeric dtype)                   |
+| `mag`    | (n,)   | PSF magnitudes (any numeric dtype)                             |
+| `magerr` | (n,)   | 1-σ magnitude uncertainties (any numeric dtype)                |
+| `band`   | (n,)   | ZTF band labels — each element in `{"g","r","i"}` (see [ZTF](https://www.ztf.caltech.edu)) |
 
 ## Development
 
