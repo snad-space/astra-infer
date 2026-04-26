@@ -122,3 +122,107 @@ def test_preprocess_many_matches_preprocess_lc(onnx_file):
         single = preprocess_lc(*lc)
         for s_arr, m_arr in zip(single, stacked, strict=True):
             np.testing.assert_array_equal(s_arr, m_arr[[i]])
+
+
+# ---------------------------------------------------------------------------
+# PyArrow helpers
+# ---------------------------------------------------------------------------
+
+def _make_list_struct(lcs):
+    """Build a pa.ListArray (list-of-struct) from a list of (time, mag, magerr, band) tuples."""
+    import pyarrow as pa
+
+    all_time, all_mag, all_magerr, all_band = [], [], [], []
+    offsets = [0]
+    for time, mag, magerr, band in lcs:
+        all_time.append(pa.array(time))
+        all_mag.append(pa.array(mag))
+        all_magerr.append(pa.array(magerr))
+        all_band.append(pa.array(band, type=pa.string()))
+        offsets.append(offsets[-1] + len(time))
+
+    flat_struct = pa.StructArray.from_arrays(
+        [pa.concat_arrays(all_time), pa.concat_arrays(all_mag),
+         pa.concat_arrays(all_magerr), pa.concat_arrays(all_band)],
+        names=["time", "mag", "magerr", "band"],
+    )
+    return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), flat_struct)
+
+
+def _make_table(lcs):
+    """Build a pa.Table (struct-of-lists) from a list of (time, mag, magerr, band) tuples."""
+    import pyarrow as pa
+
+    times, mags, magerrs, bands = zip(*lcs, strict=True)
+    return pa.table({
+        "time": pa.array([list(t) for t in times]),
+        "mag": pa.array([list(m) for m in mags]),
+        "magerr": pa.array([list(me) for me in magerrs]),
+        "band": pa.array([list(b) for b in bands]),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Arrow tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("make_arrow", [_make_list_struct, _make_table],
+                         ids=["list_struct", "table"])
+def test_preprocess_many_arrow_matches_sequence(make_arrow):
+    """preprocess_many with Arrow input matches sequence-of-tuples result."""
+    rng = np.random.default_rng(5)
+    lcs = [
+        (rng.uniform(58_000, 59_000, n), rng.normal(18.0, 1.0, n), np.full(n, 0.1), rng.choice(BANDS, size=n))
+        for n in [32, 700, 4096]
+    ]
+
+    result_seq = preprocess_many(lcs)
+    result_arrow = preprocess_many(make_arrow(lcs))
+
+    for a, b in zip(result_seq, result_arrow, strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_preprocess_many_arrow_chunked():
+    """preprocess_many accepts a ChunkedArray of list-struct type."""
+    import pyarrow as pa
+
+    rng = np.random.default_rng(9)
+    lcs = [
+        (rng.uniform(58_000, 59_000, n), rng.normal(18.0, 1.0, n), np.full(n, 0.1), rng.choice(BANDS, size=n))
+        for n in [50, 200]
+    ]
+
+    list_struct = _make_list_struct(lcs)
+    chunked = pa.chunked_array([list_struct])
+
+    result_seq = preprocess_many(lcs)
+    result_arrow = preprocess_many(chunked)
+
+    for a, b in zip(result_seq, result_arrow, strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
+def test_preprocess_many_arrow_custom_field_names():
+    """preprocess_many accepts a custom field_names mapping."""
+    import pyarrow as pa
+
+    rng = np.random.default_rng(6)
+    n = 100
+    time = rng.uniform(58_000, 59_000, n)
+    mag = rng.normal(18.0, 1.0, n)
+    magerr = np.full(n, 0.1)
+    band = rng.choice(BANDS, size=n)
+
+    flat_struct = pa.StructArray.from_arrays(
+        [pa.array(time), pa.array(mag), pa.array(magerr), pa.array(band, type=pa.string())],
+        names=["mjd", "psf_mag", "psf_magerr", "fid"],
+    )
+    arrow_lcs = pa.ListArray.from_arrays(pa.array([0, n], type=pa.int32()), flat_struct)
+
+    custom_names = {"time": "mjd", "mag": "psf_mag", "magerr": "psf_magerr", "band": "fid"}
+    result_arrow = preprocess_many(arrow_lcs, field_names=custom_names)
+    result_seq = preprocess_many([(time, mag, magerr, band)])
+
+    for a, b in zip(result_seq, result_arrow, strict=True):
+        np.testing.assert_array_equal(a, b)

@@ -1,9 +1,15 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import onnxruntime as ort
 from numpy.typing import ArrayLike
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 BANDS = np.array(["g", "r", "i"])
 SEQUENCE_PER_BAND = {"g": 300, "r": 350, "i": 50}
@@ -158,21 +164,129 @@ def preprocess_lc(
     return first_window(norm_mag, norm_time, band)
 
 
-def preprocess_many(
-    lcs: Sequence[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]],
+_DEFAULT_FIELD_NAMES: dict[str, str] = {"time": "time", "mag": "mag", "magerr": "magerr", "band": "band"}
+"""Default mapping from canonical field names to Arrow column/field names."""
+
+
+def _is_arrow(obj: Any) -> bool:
+    """Return True if *obj* is a recognised PyArrow container type."""
+    try:
+        import pyarrow as pa
+
+        return isinstance(obj, (pa.ListArray, pa.ChunkedArray, pa.Table, pa.StructArray))
+    except ImportError:
+        return False
+
+
+def _preprocess_many_arrow(
+    lcs: pa.ListArray | pa.ChunkedArray | pa.Table | pa.StructArray,
+    field_names: dict[str, str],
     *,
+    presorted: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Pre-process an Arrow input into stacked ONNX-ready tensors.
+
+    Supports four layouts:
+
+    * ``pa.ListArray`` with a struct value type (*list-of-struct*): the natural
+      output of nested-pandas / Arrow list arrays.
+    * ``pa.ChunkedArray`` of the same type — combined with
+      :meth:`~pyarrow.ChunkedArray.combine_chunks` before processing.
+    * ``pa.Table`` where every relevant column is a ``ListArray`` of
+      per-observation values (*struct-of-lists*).
+    * ``pa.StructArray`` whose fields are ``ListArray`` s of per-observation
+      values (*struct-of-lists*).
+
+    Numeric fields are extracted as zero-copy NumPy views via
+    ``flat.to_numpy()``.  The string ``band`` column is sliced per-row with
+    ``pa.Array.slice()`` to avoid materialising the full flat list.
+
+    Parameters
+    ----------
+    lcs : pa.ListArray | pa.ChunkedArray | pa.Table | pa.StructArray
+        Arrow container holding the light curves.
+    field_names : dict[str, str]
+        Mapping from canonical names (``"time"``, ``"mag"``, ``"magerr"``,
+        ``"band"``) to the actual Arrow column / field names.
+    presorted : bool, optional
+        If ``True``, every light curve is assumed to be sorted by time.
+
+    Returns
+    -------
+    tuple of four ndarrays
+        ``(norm_mag, norm_time, lg_wave, mask)`` with shapes
+        ``(N, 700, 1)``, ``(N, 700, 1)``, ``(N, 700, 1)``, ``(N, 700)``.
+    """
+    import pyarrow as pa
+
+    if isinstance(lcs, pa.ChunkedArray):
+        lcs = lcs.combine_chunks()
+
+    if isinstance(lcs, pa.ListArray):
+        # list-of-struct: offsets index into a flat StructArray
+        offsets = lcs.offsets.to_numpy()
+        flat_struct = lcs.values
+        cols = {key: flat_struct.field(arrow_name) for key, arrow_name in field_names.items()}
+
+    elif isinstance(lcs, (pa.Table, pa.StructArray)):
+        # struct-of-lists: each field / column is a ListArray of per-observation values
+        offsets = None
+        cols = {}
+        for key, arrow_name in field_names.items():
+            col = lcs.column(arrow_name) if isinstance(lcs, pa.Table) else lcs.field(arrow_name)
+            if isinstance(col, pa.ChunkedArray):
+                col = col.combine_chunks()
+            if offsets is None:
+                offsets = col.offsets.to_numpy()
+            cols[key] = col.values
+
+    else:
+        raise TypeError(f"Unsupported Arrow input type: {type(lcs).__name__}")
+
+    time_flat = cols["time"].to_numpy(zero_copy_only=False)
+    mag_flat = cols["mag"].to_numpy(zero_copy_only=False)
+    magerr_flat = cols["magerr"].to_numpy(zero_copy_only=False)
+    band_col = cols["band"]  # kept as Arrow; sliced per-row to avoid full materialisation
+
+    tensors = []
+    for i in range(len(offsets) - 1):
+        s, e = int(offsets[i]), int(offsets[i + 1])
+        band_i = np.asarray(band_col.slice(s, e - s).to_pylist())
+        tensors.append(
+            preprocess_lc(time_flat[s:e], mag_flat[s:e], magerr_flat[s:e], band_i, presorted=presorted)
+        )
+
+    return (
+        np.concatenate([t[0] for t in tensors], axis=0),
+        np.concatenate([t[1] for t in tensors], axis=0),
+        np.concatenate([t[2] for t in tensors], axis=0),
+        np.concatenate([t[3] for t in tensors], axis=0),
+    )
+
+
+def preprocess_many(
+    lcs: Sequence[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]] | Any,
+    *,
+    field_names: dict[str, str] | None = None,
     presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Pre-process multiple light curves into stacked ONNX-ready tensors.
 
-    Each element of *lcs* is a ``(time, mag, magerr, band)`` tuple that is
-    passed to :func:`preprocess_lc` individually, then the results are
-    concatenated along the batch axis.
+    Accepts either a sequence of ``(time, mag, magerr, band)`` tuples or a
+    PyArrow container (``ListArray``, ``ChunkedArray``, ``Table``, or
+    ``StructArray``).  See :func:`_preprocess_many_arrow` for details of the
+    Arrow layouts that are supported.
 
     Parameters
     ----------
-    lcs : sequence of (time, mag, magerr, band) tuples
-        One tuple per light curve.
+    lcs : sequence of (time, mag, magerr, band) tuples, or Arrow container
+        One light curve per element / row.
+    field_names : dict[str, str] | None, optional
+        Mapping from canonical names (``"time"``, ``"mag"``, ``"magerr"``,
+        ``"band"``) to the Arrow column / field names used in *lcs*.  Only
+        relevant when *lcs* is an Arrow container.  If ``None``, the canonical
+        names are used unchanged.  Passing a non-None value forces Arrow
+        processing even when *lcs* is a plain sequence.
     presorted : bool, optional
         If ``True``, every light curve is assumed to be sorted by time.
         Default is ``False``.
@@ -183,6 +297,8 @@ def preprocess_many(
         ``(norm_mag, norm_time, lg_wave, mask)`` with shapes
         ``(N, 700, 1)``, ``(N, 700, 1)``, ``(N, 700, 1)``, ``(N, 700)``.
     """
+    if field_names is not None or _is_arrow(lcs):
+        return _preprocess_many_arrow(lcs, field_names or _DEFAULT_FIELD_NAMES, presorted=presorted)
     tensors = [preprocess_lc(*lc, presorted=presorted) for lc in lcs]
     return (
         np.concatenate([t[0] for t in tensors], axis=0),
