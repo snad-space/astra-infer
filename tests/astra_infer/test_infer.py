@@ -1,7 +1,15 @@
 import numpy as np
 import pytest
 
-from astra_infer.infer import BANDS, SEQUENCE_LENGTH, AstraInfer, infer, preprocess, run_onnx
+from astra_infer.infer import (
+    BANDS,
+    SEQUENCE_LENGTH,
+    AstraInfer,
+    infer,
+    preprocess_lc,
+    preprocess_many,
+    run_onnx,
+)
 
 
 def test_run_onnx(onnx_file):
@@ -60,21 +68,20 @@ def test_predict_batch(onnx_file, n_curves, batch_size):
     rng = np.random.default_rng(1)
     n = 150
 
-    times   = [rng.uniform(58_000, 59_000, n) for _ in range(n_curves)]
-    mags    = [rng.normal(18.0, 1.0, n) for _ in range(n_curves)]
-    magerrs = [np.full(n, 0.1) for _ in range(n_curves)]
-    bands   = [rng.choice(BANDS, size=n) for _ in range(n_curves)]
+    lcs = [
+        (rng.uniform(58_000, 59_000, n), rng.normal(18.0, 1.0, n), np.full(n, 0.1), rng.choice(BANDS, size=n))
+        for _ in range(n_curves)
+    ]
 
     model = AstraInfer(onnx_file)
-    tensors = [preprocess(t, m, me, b) for t, m, me, b in zip(times, mags, magerrs, bands, strict=True)]
-    batch_embeddings = model.predict_batch(tensors, batch_size=batch_size)
+    batch_embeddings = model.predict_batch(*preprocess_many(lcs), batch_size=batch_size)
 
     assert batch_embeddings.shape == (n_curves, 512)
     assert np.all(np.isfinite(batch_embeddings))
 
     # Must match individual calls
-    for i in range(n_curves):
-        single = model(times[i], mags[i], magerrs[i], bands[i])
+    for i, lc in enumerate(lcs):
+        single = model(*lc)
         np.testing.assert_array_equal(batch_embeddings[i], single[0])
 
 
@@ -97,3 +104,21 @@ def test_presorted_matches_unsorted(onnx_file):
     result_pre = model(time_s, mag_s, magerr_s, band_s, presorted=True)
 
     np.testing.assert_array_equal(result_auto, result_pre)
+
+
+def test_preprocess_many_matches_preprocess_lc(onnx_file):
+    """preprocess_many stacks individual preprocess_lc results correctly."""
+    rng = np.random.default_rng(3)
+    lcs = [
+        (rng.uniform(58_000, 59_000, n), rng.normal(18.0, 1.0, n), np.full(n, 0.1), rng.choice(BANDS, size=n))
+        for n in [32, 700, 4096]
+    ]
+
+    stacked = preprocess_many(lcs)
+    assert stacked[0].shape == (3, 700, 1)
+    assert stacked[3].shape == (3, 700)
+
+    for i, lc in enumerate(lcs):
+        single = preprocess_lc(*lc)
+        for s_arr, m_arr in zip(single, stacked, strict=True):
+            np.testing.assert_array_equal(s_arr, m_arr[[i]])
