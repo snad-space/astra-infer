@@ -11,17 +11,20 @@ Parameterised over:
 - ``presorted``: whether the caller guarantees time-sorted input
                  (``True`` skips the internal ``argsort`` step)
 
+``InferenceBenchmarks`` requires an ONNX model.  Set the environment
+variable ``ASTRA_INFER_MODEL_PATH`` to the model file before running:
+
+    ASTRA_INFER_MODEL_PATH=/path/to/model.onnx asv run
+
 For more information on writing benchmarks:
 https://asv.readthedocs.io/en/stable/writing_benchmarks.html.
 """
 
-from pathlib import Path
+import os
 
 import numpy as np
 
-from astra_infer.infer import BANDS, AstraInfer, first_window, normalize_mag, normalize_time
-
-_ONNX_FILE = Path(__file__).parent.parent / "tests" / "astra_infer" / "test_data" / "best_contrastive.onnx"
+from astra_infer.infer import BANDS, AstraInfer, first_window, normalize_mag, normalize_time, preprocess
 
 _N_OBS = [32, 700, 4096]
 _BAND_MIXES = ["balanced", "g_only", "ri_only"]
@@ -52,45 +55,34 @@ def _make_inputs(n_obs: int, band_mix: str, seed: int = 42):
 
 
 class PreprocessingBenchmarks:
-    """Pre-processing steps only (no ONNX inference)."""
+    """Individual pre-processing steps — no ONNX session required."""
 
     params = [_N_OBS, _BAND_MIXES, _PRESORTED]
     param_names = ["n_obs", "band_mix", "presorted"]
 
     def setup(self, n_obs, band_mix, presorted):
-        """Prepare normalised (and optionally pre-sorted) arrays."""
+        """Prepare raw (and optionally pre-sorted) input arrays."""
         time, mag, magerr, band = _make_inputs(n_obs, band_mix)
-        norm_mag = normalize_mag(mag, magerr).astype(np.float32)
-        norm_time = normalize_time(time).astype(np.float32)
 
         if presorted:
+            norm_time = normalize_time(time).astype(np.float32)
             idx = np.argsort(norm_time)
-            norm_time = norm_time[idx]
-            norm_mag = norm_mag[idx]
-            band = band[idx]
+            time, mag, magerr, band = time[idx], mag[idx], magerr[idx], band[idx]
 
         self.time = time
         self.mag = mag
         self.magerr = magerr
         self.band = band
-        self.norm_mag = norm_mag
-        self.norm_time = norm_time
 
-    def time_full_preprocess(self, n_obs, band_mix, presorted):
-        """Full pre-processing pipeline: normalize → optional sort → first_window."""
-        norm_mag = normalize_mag(self.mag, self.magerr).astype(np.float32)
-        norm_time = normalize_time(self.time).astype(np.float32)
-        band = self.band.copy()
-        if not presorted:
-            idx = np.argsort(norm_time)
-            norm_time = norm_time[idx]
-            norm_mag = norm_mag[idx]
-            band = band[idx]
-        first_window(norm_mag, norm_time, band)
+    def time_preprocess(self, n_obs, band_mix, presorted):
+        """Full pre-processing pipeline via the standalone preprocess()."""
+        preprocess(self.time, self.mag, self.magerr, self.band, presorted=presorted)
 
     def time_first_window(self, n_obs, band_mix, presorted):
-        """``first_window`` only (inputs already normalised and conditionally sorted)."""
-        first_window(self.norm_mag, self.norm_time, self.band)
+        """``first_window`` only (inputs already normalised and sorted)."""
+        norm_mag = normalize_mag(self.mag, self.magerr).astype(np.float32)
+        norm_time = normalize_time(self.time).astype(np.float32)
+        first_window(norm_mag, norm_time, self.band)
 
     def time_normalize_mag(self, n_obs, band_mix, presorted):
         """Magnitude normalisation only."""
@@ -100,27 +92,31 @@ class PreprocessingBenchmarks:
         """Time-sort step only (skipped when ``presorted=True``)."""
         if presorted:
             return
-        np.argsort(self.norm_time)
+        norm_time = normalize_time(self.time).astype(np.float32)
+        np.argsort(norm_time)
 
 
 class InferenceBenchmarks:
-    """End-to-end benchmarks using :class:`~astra_infer.infer.AstraInfer`."""
+    """End-to-end benchmarks using :class:`~astra_infer.infer.AstraInfer`.
+
+    Requires ``ASTRA_INFER_MODEL_PATH`` to be set in the environment.
+    """
 
     params = [_N_OBS, _BAND_MIXES, _PRESORTED]
     param_names = ["n_obs", "band_mix", "presorted"]
 
     def setup(self, n_obs, band_mix, presorted):
-        """Create the AstraInfer model and prepare input arrays."""
-        self.model = AstraInfer(_ONNX_FILE)
+        """Load the model and prepare input arrays."""
+        model_path = os.environ.get("ASTRA_INFER_MODEL_PATH")
+        if not model_path:
+            raise NotImplementedError("Set ASTRA_INFER_MODEL_PATH to run inference benchmarks")
+        self.model = AstraInfer(model_path)
         time, mag, magerr, band = _make_inputs(n_obs, band_mix)
 
         if presorted:
             norm_time = normalize_time(time).astype(np.float32)
             idx = np.argsort(norm_time)
-            time = time[idx]
-            mag = mag[idx]
-            magerr = magerr[idx]
-            band = band[idx]
+            time, mag, magerr, band = time[idx], mag[idx], magerr[idx], band[idx]
 
         self.time = time
         self.mag = mag

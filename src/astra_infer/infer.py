@@ -114,6 +114,49 @@ def first_window(
     )
 
 
+def preprocess(
+    time: ArrayLike,
+    mag: ArrayLike,
+    magerr: ArrayLike,
+    band: ArrayLike,
+    *,
+    presorted: bool = False,
+) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]:
+    """Run the pre-processing pipeline and return ONNX-ready tensors.
+
+    Parameters
+    ----------
+    time : array-like
+        Observation times (MJD).
+    mag : array-like
+        Observed magnitudes.
+    magerr : array-like
+        Magnitude uncertainties.
+    band : array-like
+        Band labels (elements must be in ``BANDS``).
+    presorted : bool, optional
+        If ``True``, the caller guarantees that observations are already
+        sorted by time in ascending order, skipping the internal
+        ``argsort`` step.  Default is ``False``.
+
+    Returns
+    -------
+    tuple of four ndarrays
+        ``(norm_mag, norm_time, lg_wave, mask)`` shaped for the ONNX
+        model: first three are ``(1, 700, 1)``, mask is ``(1, 700)``.
+    """
+    norm_mag = normalize_mag(mag, magerr).astype(np.float32)
+    norm_time = normalize_time(time).astype(np.float32)
+
+    if not presorted:
+        time_idx = np.argsort(norm_time)
+        norm_time = norm_time[time_idx]
+        norm_mag = norm_mag[time_idx]
+        band = band[time_idx]
+
+    return first_window(norm_mag, norm_time, band)
+
+
 class AstraInfer:
     """Wraps an ONNX session together with the light-curve pre-processing pipeline.
 
@@ -126,6 +169,21 @@ class AstraInfer:
 
     def __init__(self, onnx_file: str | Path) -> None:
         self._session = ort.InferenceSession(onnx_file)
+
+    def preprocess(
+        self,
+        time: ArrayLike,
+        mag: ArrayLike,
+        magerr: ArrayLike,
+        band: ArrayLike,
+        *,
+        presorted: bool = False,
+    ) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]:
+        """Run the pre-processing pipeline and return ONNX-ready tensors.
+
+        Delegates to the module-level :func:`preprocess` function.
+        """
+        return preprocess(time, mag, magerr, band, presorted=presorted)
 
     def __call__(
         self,
@@ -158,17 +216,7 @@ class AstraInfer:
         embeddings : ndarray, shape (1, 512)
             Model output embeddings.
         """
-        norm_mag = normalize_mag(mag, magerr).astype(np.float32)
-        norm_time = normalize_time(time).astype(np.float32)
-
-        if not presorted:
-            time_idx = np.argsort(norm_time)
-            norm_time = norm_time[time_idx]
-            norm_mag = norm_mag[time_idx]
-            band = band[time_idx]
-
-        first_window_inputs = first_window(norm_mag, norm_time, band)
-        return _run_session(self._session, *first_window_inputs)
+        return _run_session(self._session, *self.preprocess(time, mag, magerr, band, presorted=presorted))
 
 
 def infer(
