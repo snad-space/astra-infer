@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -217,6 +218,53 @@ class AstraInfer:
             Model output embeddings.
         """
         return _run_session(self._session, *self.preprocess(time, mag, magerr, band, presorted=presorted))
+
+    def predict_batch(
+        self,
+        times: Sequence[ArrayLike],
+        mags: Sequence[ArrayLike],
+        magerrs: Sequence[ArrayLike],
+        bands: Sequence[ArrayLike],
+        *,
+        presorted: bool = False,
+        batch_size: int = 128,
+    ) -> np.ndarray:
+        """Run pre-processing and inference for multiple light curves.
+
+        Each light curve is preprocessed independently, then packed into
+        batches of up to ``batch_size`` for a single ONNX call.
+
+        Parameters
+        ----------
+        times, mags, magerrs, bands : sequences of array-like
+            Per-light-curve observation arrays (equal length, one element per
+            light curve).
+        presorted : bool, optional
+            If ``True``, every light curve is assumed to be sorted by time,
+            skipping the internal ``argsort`` step.  Default is ``False``.
+        batch_size : int, optional
+            Maximum number of light curves per ONNX call.  Default is 128.
+
+        Returns
+        -------
+        embeddings : ndarray, shape (N, 512)
+            One 512-d embedding per input light curve.
+        """
+        tensors = [
+            preprocess(t, m, me, b, presorted=presorted)
+            for t, m, me, b in zip(times, mags, magerrs, bands, strict=True)
+        ]
+
+        results = []
+        for start in range(0, len(tensors), batch_size):
+            chunk = tensors[start : start + batch_size]
+            norm_mag  = np.concatenate([c[0] for c in chunk], axis=0)
+            norm_time = np.concatenate([c[1] for c in chunk], axis=0)
+            lg_wave   = np.concatenate([c[2] for c in chunk], axis=0)
+            mask      = np.concatenate([c[3] for c in chunk], axis=0)
+            results.append(_run_session(self._session, norm_mag, norm_time, lg_wave, mask))
+
+        return np.concatenate(results, axis=0)
 
 
 def infer(

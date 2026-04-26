@@ -54,6 +54,29 @@ def test_astra_infer_class(onnx_file, n):
     np.testing.assert_array_equal(embeddings, model(time, mag, magerr, band))
 
 
+@pytest.mark.parametrize("n_curves,batch_size", [(1, 128), (10, 3), (10, 128)])
+def test_predict_batch(onnx_file, n_curves, batch_size):
+    """predict_batch returns (N, 512) and matches repeated single-curve calls."""
+    rng = np.random.default_rng(1)
+    n = 150
+
+    times   = [rng.uniform(58_000, 59_000, n) for _ in range(n_curves)]
+    mags    = [rng.normal(18.0, 1.0, n) for _ in range(n_curves)]
+    magerrs = [np.full(n, 0.1) for _ in range(n_curves)]
+    bands   = [rng.choice(BANDS, size=n) for _ in range(n_curves)]
+
+    model = AstraInfer(onnx_file)
+    batch_embeddings = model.predict_batch(times, mags, magerrs, bands, batch_size=batch_size)
+
+    assert batch_embeddings.shape == (n_curves, 512)
+    assert np.all(np.isfinite(batch_embeddings))
+
+    # Must match individual calls
+    for i in range(n_curves):
+        single = model(times[i], mags[i], magerrs[i], bands[i])
+        np.testing.assert_array_equal(batch_embeddings[i], single[0])
+
+
 def test_presorted_matches_unsorted(onnx_file):
     """presorted=True gives the same result as the default sort path."""
     rng = np.random.default_rng(7)
