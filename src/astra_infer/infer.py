@@ -158,45 +158,6 @@ def preprocess(
     return first_window(norm_mag, norm_time, band)
 
 
-def preprocess_batch(
-    times: Sequence[ArrayLike],
-    mags: Sequence[ArrayLike],
-    magerrs: Sequence[ArrayLike],
-    bands: Sequence[ArrayLike],
-    *,
-    presorted: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Pre-process multiple light curves into stacked ONNX-ready tensors.
-
-    Each light curve is processed independently via :func:`preprocess`, then
-    the results are concatenated along the batch axis.
-
-    Parameters
-    ----------
-    times, mags, magerrs, bands : sequences of array-like
-        Per-light-curve observation arrays (equal length).
-    presorted : bool, optional
-        If ``True``, every light curve is assumed to be sorted by time.
-        Default is ``False``.
-
-    Returns
-    -------
-    tuple of four ndarrays
-        ``(norm_mag, norm_time, lg_wave, mask)`` with shapes
-        ``(N, 700, 1)``, ``(N, 700, 1)``, ``(N, 700, 1)``, ``(N, 700)``.
-    """
-    tensors = [
-        preprocess(t, m, me, b, presorted=presorted)
-        for t, m, me, b in zip(times, mags, magerrs, bands, strict=True)
-    ]
-    return (
-        np.concatenate([t[0] for t in tensors], axis=0),
-        np.concatenate([t[1] for t in tensors], axis=0),
-        np.concatenate([t[2] for t in tensors], axis=0),
-        np.concatenate([t[3] for t in tensors], axis=0),
-    )
-
-
 class AstraInfer:
     """Wraps an ONNX session together with the light-curve pre-processing pipeline.
 
@@ -260,24 +221,22 @@ class AstraInfer:
 
     def predict_batch(
         self,
-        norm_mag: np.ndarray,
-        norm_time: np.ndarray,
-        lg_wave: np.ndarray,
-        mask: np.ndarray,
+        tensors: Sequence[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
         *,
         batch_size: int = 128,
     ) -> np.ndarray:
-        """Run ONNX inference on pre-processed stacked tensors.
+        """Run ONNX inference on a sequence of pre-processed light curves.
 
-        Accepts the output of :func:`preprocess_batch` directly and splits it
-        into chunks of up to ``batch_size`` for each ONNX call.
+        Each element of *tensors* should be the 4-tuple returned by
+        :func:`preprocess` for one light curve.  The method stacks them
+        internally and splits into chunks of ``batch_size`` for each ONNX
+        call.
 
         Parameters
         ----------
-        norm_mag, norm_time, lg_wave : ndarray, shape (N, 700, 1)
-            Pre-processed input tensors as returned by :func:`preprocess_batch`.
-        mask : ndarray, shape (N, 700)
-            Padding mask as returned by :func:`preprocess_batch`.
+        tensors : sequence of 4-tuples
+            Each tuple is ``(norm_mag, norm_time, lg_wave, mask)`` as
+            returned by :func:`preprocess`.
         batch_size : int, optional
             Maximum number of light curves per ONNX call.  Default is 128.
 
@@ -285,12 +244,16 @@ class AstraInfer:
         -------
         embeddings : ndarray, shape (N, 512)
             One 512-d embedding per input light curve.
+
         """
-        n = norm_mag.shape[0]
         results = []
-        for start in range(0, n, batch_size):
-            sl = slice(start, start + batch_size)
-            results.append(_run_session(self._session, norm_mag[sl], norm_time[sl], lg_wave[sl], mask[sl]))
+        for start in range(0, len(tensors), batch_size):
+            chunk = tensors[start : start + batch_size]
+            norm_mag  = np.concatenate([c[0] for c in chunk], axis=0)
+            norm_time = np.concatenate([c[1] for c in chunk], axis=0)
+            lg_wave   = np.concatenate([c[2] for c in chunk], axis=0)
+            mask      = np.concatenate([c[3] for c in chunk], axis=0)
+            results.append(_run_session(self._session, norm_mag, norm_time, lg_wave, mask))
         return np.concatenate(results, axis=0)
 
 
