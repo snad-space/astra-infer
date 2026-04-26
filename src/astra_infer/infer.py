@@ -20,6 +20,11 @@ assert list(BANDS) == list(LG_EFF_WAVE.keys())
 def run_onnx(
     onnx_file: str | Path, norm_mag: ArrayLike, time: ArrayLike, lg_wave: ArrayLike, mask: ArrayLike
 ) -> ArrayLike:
+    """Run ONNX inference, creating a new session from *onnx_file* each call.
+
+    For repeated inference prefer :class:`AstraInfer`, which holds a single
+    session across calls.
+    """
     session = ort.InferenceSession(onnx_file)
     return _run_session(session, norm_mag, time, lg_wave, mask)
 
@@ -39,33 +44,43 @@ def _run_session(
     return embeddings
 
 
-def normalize_mag(mag, magerr):
+def normalize_mag(mag: ArrayLike, magerr: ArrayLike) -> ArrayLike:
+    """Return inverse-variance weighted mean-subtracted magnitudes."""
     weighted_mean = np.average(mag, weights=magerr**-2)
-    norm_mag = mag - weighted_mean
-    return norm_mag
+    return mag - weighted_mean
 
 
-def normalize_time(time):
+def normalize_time(time: ArrayLike) -> ArrayLike:
+    """Shift times by :data:`MJD_OFFSET` so values are near zero."""
     return time - MJD_OFFSET
 
 
-def single_band_first_window(mag, time, band, band_name):
+def single_band_first_window(
+    mag: ArrayLike, time: ArrayLike, band: ArrayLike, band_name: str
+) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]:
+    """Clip or pad a single band to its target sequence length.
+
+    Returns ``(mag, time, lg_eff_wave, mask)`` each of length
+    ``SEQUENCE_PER_BAND[band_name]``.  Padded positions have ``mask == 1``.
+    """
     boolmask = band == band_name
-    mag, time, band = mag[boolmask], time[boolmask], band[boolmask]
+    mag, time = mag[boolmask], time[boolmask]
 
     dtype = mag.dtype
     input_size = mag.size
     seq_size = SEQUENCE_PER_BAND[band_name]
     pad_size = seq_size - input_size
     lg_eff_wave = LG_EFF_WAVE[band_name]
-    # Clipping
+
     if pad_size <= 0:
+        # Clipping
         return (
             mag[:seq_size],
             time[:seq_size],
             np.full(seq_size, lg_eff_wave, dtype=dtype),
             np.zeros(seq_size, dtype=dtype),
         )
+
     # Padding
     pad_val = np.zeros(pad_size, dtype=dtype)
     return (
@@ -76,11 +91,15 @@ def single_band_first_window(mag, time, band, band_name):
     )
 
 
-def first_window(mag, time, band):
-    mag_ = []
-    time_ = []
-    lg_wave_ = []
-    mask_ = []
+def first_window(
+    mag: ArrayLike, time: ArrayLike, band: ArrayLike
+) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]:
+    """Assemble the first-window input tensors for all bands.
+
+    Returns ``(norm_mag, time, lg_wave, mask)`` each shaped ``(1, 700, 1)``
+    except *mask* which is ``(1, 700)``, ready to feed into the ONNX model.
+    """
+    mag_, time_, lg_wave_, mask_ = [], [], [], []
     for band_name in BANDS:
         mag_b, time_b, lg_wave_b, mask_b = single_band_first_window(mag, time, band, band_name)
         mag_.append(mag_b)
@@ -160,8 +179,12 @@ def infer(
     band: ArrayLike,
     *,
     presorted: bool = False,
-):
+) -> ArrayLike:
     """Run inference for a single light curve.
+
+    .. note::
+        A new ONNX session is created on every call.  For repeated inference
+        use :class:`AstraInfer` directly so the session is reused.
 
     Parameters
     ----------
@@ -179,6 +202,10 @@ def infer(
         If ``True``, the caller guarantees that observations are already sorted
         by time in ascending order, skipping the internal ``argsort`` step.
         Default is ``False``.
+
+    Returns
+    -------
+    embeddings : ndarray, shape (1, 512)
+        Model output embeddings.
     """
-    model = AstraInfer(onnx_file)
-    return model(time, mag, magerr, band, presorted=presorted)
+    return AstraInfer(onnx_file)(time, mag, magerr, band, presorted=presorted)

@@ -58,6 +58,7 @@ class PreprocessingBenchmarks:
     param_names = ["n_obs", "band_mix", "presorted"]
 
     def setup(self, n_obs, band_mix, presorted):
+        """Prepare normalised (and optionally pre-sorted) arrays."""
         time, mag, magerr, band = _make_inputs(n_obs, band_mix)
         norm_mag = normalize_mag(mag, magerr).astype(np.float32)
         norm_time = normalize_time(time).astype(np.float32)
@@ -109,6 +110,7 @@ class InferenceBenchmarks:
     param_names = ["n_obs", "band_mix", "presorted"]
 
     def setup(self, n_obs, band_mix, presorted):
+        """Create the AstraInfer model and prepare input arrays."""
         self.model = AstraInfer(_ONNX_FILE)
         time, mag, magerr, band = _make_inputs(n_obs, band_mix)
 
