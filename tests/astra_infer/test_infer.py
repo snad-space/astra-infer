@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from astra_infer.infer import BANDS, SEQUENCE_LENGTH, AstraInfer, infer, run_onnx
+from astra_infer.infer import BANDS, SEQUENCE_LENGTH, AstraInfer, infer, preprocess_batch, run_onnx
 
 
 def test_run_onnx(onnx_file):
@@ -66,7 +66,8 @@ def test_predict_batch(onnx_file, n_curves, batch_size):
     bands   = [rng.choice(BANDS, size=n) for _ in range(n_curves)]
 
     model = AstraInfer(onnx_file)
-    batch_embeddings = model.predict_batch(times, mags, magerrs, bands, batch_size=batch_size)
+    tensors = preprocess_batch(times, mags, magerrs, bands)
+    batch_embeddings = model.predict_batch(*tensors, batch_size=batch_size)
 
     assert batch_embeddings.shape == (n_curves, 512)
     assert np.all(np.isfinite(batch_embeddings))
