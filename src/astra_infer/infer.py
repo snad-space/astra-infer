@@ -21,6 +21,16 @@ def run_onnx(
     onnx_file: str | Path, norm_mag: ArrayLike, time: ArrayLike, lg_wave: ArrayLike, mask: ArrayLike
 ) -> ArrayLike:
     session = ort.InferenceSession(onnx_file)
+    return _run_session(session, norm_mag, time, lg_wave, mask)
+
+
+def _run_session(
+    session: ort.InferenceSession,
+    norm_mag: ArrayLike,
+    time: ArrayLike,
+    lg_wave: ArrayLike,
+    mask: ArrayLike,
+) -> ArrayLike:
     norm_mag = norm_mag.astype(np.float32)
     time = time.astype(np.float32)
     lg_wave = lg_wave.astype(np.float32)
@@ -85,15 +95,90 @@ def first_window(mag, time, band):
     )
 
 
-def infer(onnx_file: str | Path, time: ArrayLike, mag: ArrayLike, magerr: ArrayLike, band: ArrayLike):
-    """Run inference for a single light curve"""
+class AstraInfer:
+    """Wraps an ONNX session together with the light-curve pre-processing pipeline.
 
-    norm_mag = normalize_mag(mag, magerr).astype(np.float32)
-    norm_time = normalize_time(time).astype(np.float32)
+    Parameters
+    ----------
+    onnx_file : str or Path
+        Path to the ONNX model file.  The session is created once and reused
+        for every call, avoiding repeated session-initialisation overhead.
+    """
 
-    time_idx = np.argsort(norm_time)
-    norm_time, norm_mag, band = norm_time[time_idx], norm_mag[time_idx], band[time_idx]
+    def __init__(self, onnx_file: str | Path) -> None:
+        self._session = ort.InferenceSession(onnx_file)
 
-    first_window_inputs = first_window(norm_mag, time, band)
+    def __call__(
+        self,
+        time: ArrayLike,
+        mag: ArrayLike,
+        magerr: ArrayLike,
+        band: ArrayLike,
+        *,
+        presorted: bool = False,
+    ) -> ArrayLike:
+        """Run pre-processing and inference for a single light curve.
 
-    return run_onnx(onnx_file, *first_window_inputs)
+        Parameters
+        ----------
+        time : array-like
+            Observation times (MJD).
+        mag : array-like
+            Observed magnitudes.
+        magerr : array-like
+            Magnitude uncertainties.
+        band : array-like
+            Band labels (elements must be in ``BANDS``).
+        presorted : bool, optional
+            If ``True``, the caller guarantees that observations are already
+            sorted by time in ascending order, skipping the internal
+            ``argsort`` step.  Default is ``False``.
+
+        Returns
+        -------
+        embeddings : ndarray, shape (1, 512)
+            Model output embeddings.
+        """
+        norm_mag = normalize_mag(mag, magerr).astype(np.float32)
+        norm_time = normalize_time(time).astype(np.float32)
+
+        if not presorted:
+            time_idx = np.argsort(norm_time)
+            norm_time = norm_time[time_idx]
+            norm_mag = norm_mag[time_idx]
+            band = band[time_idx]
+
+        first_window_inputs = first_window(norm_mag, norm_time, band)
+        return _run_session(self._session, *first_window_inputs)
+
+
+def infer(
+    onnx_file: str | Path,
+    time: ArrayLike,
+    mag: ArrayLike,
+    magerr: ArrayLike,
+    band: ArrayLike,
+    *,
+    presorted: bool = False,
+):
+    """Run inference for a single light curve.
+
+    Parameters
+    ----------
+    onnx_file : str or Path
+        Path to the ONNX model file.
+    time : array-like
+        Observation times (MJD).
+    mag : array-like
+        Observed magnitudes.
+    magerr : array-like
+        Magnitude uncertainties.
+    band : array-like
+        Band labels (elements must be in ``BANDS``).
+    presorted : bool, optional
+        If ``True``, the caller guarantees that observations are already sorted
+        by time in ascending order, skipping the internal ``argsort`` step.
+        Default is ``False``.
+    """
+    model = AstraInfer(onnx_file)
+    return model(time, mag, magerr, band, presorted=presorted)
