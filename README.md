@@ -32,12 +32,6 @@ Pre-processing steps:
 pip install astra_infer
 ```
 
-For PyArrow support:
-
-```bash
-pip install "astra_infer[arrow]"
-```
-
 ## Quick start
 
 ```python
