@@ -321,22 +321,7 @@ class AstraInfer:
     def __init__(self, onnx_file: str | Path) -> None:
         self._session = ort.InferenceSession(onnx_file)
 
-    def preprocess(
-        self,
-        time: ArrayLike,
-        mag: ArrayLike,
-        magerr: ArrayLike,
-        band: ArrayLike,
-        *,
-        presorted: bool = False,
-    ) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]:
-        """Run the pre-processing pipeline and return ONNX-ready tensors.
-
-        Delegates to the module-level :func:`preprocess_lc` function.
-        """
-        return preprocess_lc(time, mag, magerr, band, presorted=presorted)
-
-    def __call__(
+    def predict_lc(
         self,
         time: ArrayLike,
         mag: ArrayLike,
@@ -367,21 +352,23 @@ class AstraInfer:
         embeddings : ndarray, shape (1, 512)
             Model output embeddings.
         """
-        return _run_session(self._session, *self.preprocess(time, mag, magerr, band, presorted=presorted))
+        return _run_session(self._session, *preprocess_lc(time, mag, magerr, band, presorted=presorted))
 
-    def predict_batch(
+    def predict_tensors(
         self,
         norm_mag: np.ndarray,
         norm_time: np.ndarray,
         lg_wave: np.ndarray,
         mask: np.ndarray,
         *,
-        batch_size: int = 128,
+        batch_size: int | None = 128,
     ) -> np.ndarray:
         """Run ONNX inference on stacked pre-processed tensors.
 
-        Accepts the output of :func:`preprocess_many` directly and splits it
-        into chunks of up to ``batch_size`` for each ONNX call.
+        Accepts the output of :func:`preprocess_many` directly.  When
+        *batch_size* is set, the input is split into chunks so each ONNX call
+        processes at most that many light curves.  Pass ``batch_size=None`` to
+        run all light curves in a single ONNX call.
 
         Parameters
         ----------
@@ -389,14 +376,17 @@ class AstraInfer:
             Stacked pre-processed tensors as returned by :func:`preprocess_many`.
         mask : ndarray, shape (N, 700)
             Padding mask as returned by :func:`preprocess_many`.
-        batch_size : int, optional
-            Maximum number of light curves per ONNX call.  Default is 128.
+        batch_size : int or None, optional
+            Maximum number of light curves per ONNX call.  ``None`` runs all
+            light curves in a single call.  Default is 128.
 
         Returns
         -------
         embeddings : ndarray, shape (N, 512)
             One 512-d embedding per input light curve.
         """
+        if batch_size is None:
+            return _run_session(self._session, norm_mag, norm_time, lg_wave, mask)
         n = norm_mag.shape[0]
         results = []
         for start in range(0, n, batch_size):
@@ -442,4 +432,4 @@ def infer(
     embeddings : ndarray, shape (1, 512)
         Model output embeddings.
     """
-    return AstraInfer(onnx_file)(time, mag, magerr, band, presorted=presorted)
+    return AstraInfer(onnx_file).predict_lc(time, mag, magerr, band, presorted=presorted)

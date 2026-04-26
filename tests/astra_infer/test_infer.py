@@ -54,17 +54,17 @@ def test_astra_infer_class(onnx_file, n):
     band = rng.choice(BANDS, size=n)
 
     model = AstraInfer(onnx_file)
-    embeddings = model(time, mag, magerr, band)
+    embeddings = model.predict_lc(time, mag, magerr, band)
 
     assert embeddings.shape == (1, 512)
     assert np.all(np.isfinite(embeddings))
     # Calling twice with the same input gives identical results
-    np.testing.assert_array_equal(embeddings, model(time, mag, magerr, band))
+    np.testing.assert_array_equal(embeddings, model.predict_lc(time, mag, magerr, band))
 
 
-@pytest.mark.parametrize("n_curves,batch_size", [(1, 128), (10, 3), (10, 128)])
-def test_predict_batch(onnx_file, n_curves, batch_size):
-    """predict_batch returns (N, 512) and matches repeated single-curve calls."""
+@pytest.mark.parametrize("n_curves,batch_size", [(1, 128), (10, 3), (10, 128), (10, None)])
+def test_predict_tensors(onnx_file, n_curves, batch_size):
+    """predict_tensors returns (N, 512) and matches repeated single-curve calls."""
     rng = np.random.default_rng(1)
     n = 150
 
@@ -74,14 +74,14 @@ def test_predict_batch(onnx_file, n_curves, batch_size):
     ]
 
     model = AstraInfer(onnx_file)
-    batch_embeddings = model.predict_batch(*preprocess_many(lcs), batch_size=batch_size)
+    batch_embeddings = model.predict_tensors(*preprocess_many(lcs), batch_size=batch_size)
 
     assert batch_embeddings.shape == (n_curves, 512)
     assert np.all(np.isfinite(batch_embeddings))
 
     # Must match individual calls
     for i, lc in enumerate(lcs):
-        single = model(*lc)
+        single = model.predict_lc(*lc)
         np.testing.assert_array_equal(batch_embeddings[i], single[0])
 
 
@@ -100,8 +100,8 @@ def test_presorted_matches_unsorted(onnx_file):
     time_s, mag_s, magerr_s, band_s = time[idx], mag[idx], magerr[idx], band[idx]
 
     model = AstraInfer(onnx_file)
-    result_auto = model(time, mag, magerr, band)
-    result_pre = model(time_s, mag_s, magerr_s, band_s, presorted=True)
+    result_auto = model.predict_lc(time, mag, magerr, band)
+    result_pre = model.predict_lc(time_s, mag_s, magerr_s, band_s, presorted=True)
 
     np.testing.assert_array_equal(result_auto, result_pre)
 

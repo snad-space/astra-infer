@@ -41,13 +41,13 @@ from astra_infer import AstraInfer
 model = AstraInfer("path/to/model.onnx")
 
 # Run inference on a light curve
-embedding = model(time, mag, magerr, band)   # → ndarray shape (1, 512)
+embedding = model.predict_lc(time, mag, magerr, band)   # → ndarray shape (1, 512)
 ```
 
 If your observations are already sorted by time you can skip the internal sort:
 
 ```python
-embedding = model(time, mag, magerr, band, presorted=True)
+embedding = model.predict_lc(time, mag, magerr, band, presorted=True)
 ```
 
 A convenience function is also available for one-off calls (creates a new session
