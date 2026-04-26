@@ -1,4 +1,4 @@
-"""Benchmarks for astra_infer pre-processing and inference.
+"""Benchmarks for astra_infer pre-processing.
 
 Parameterised over:
 - ``n_obs``    : total number of observations in the light curve
@@ -11,20 +11,13 @@ Parameterised over:
 - ``presorted``: whether the caller guarantees time-sorted input
                  (``True`` skips the internal ``argsort`` step)
 
-``InferenceBenchmarks`` requires an ONNX model.  Set the environment
-variable ``ASTRA_INFER_MODEL_PATH`` to the model file before running:
-
-    ASTRA_INFER_MODEL_PATH=/path/to/model.onnx asv run
-
 For more information on writing benchmarks:
 https://asv.readthedocs.io/en/stable/writing_benchmarks.html.
 """
 
-import os
-
 import numpy as np
 
-from astra_infer.infer import BANDS, AstraInfer, first_window, normalize_mag, normalize_time, preprocess
+from astra_infer.infer import BANDS, first_window, normalize_mag, normalize_time, preprocess
 
 _N_OBS = [32, 700, 4096]
 _BAND_MIXES = ["balanced", "g_only", "ri_only"]
@@ -96,33 +89,3 @@ class PreprocessingBenchmarks:
         np.argsort(norm_time)
 
 
-class InferenceBenchmarks:
-    """End-to-end benchmarks using :class:`~astra_infer.infer.AstraInfer`.
-
-    Requires ``ASTRA_INFER_MODEL_PATH`` to be set in the environment.
-    """
-
-    params = [_N_OBS, _BAND_MIXES, _PRESORTED]
-    param_names = ["n_obs", "band_mix", "presorted"]
-
-    def setup(self, n_obs, band_mix, presorted):
-        """Load the model and prepare input arrays."""
-        model_path = os.environ.get("ASTRA_INFER_MODEL_PATH")
-        if not model_path:
-            raise NotImplementedError("Set ASTRA_INFER_MODEL_PATH to run inference benchmarks")
-        self.model = AstraInfer(model_path)
-        time, mag, magerr, band = _make_inputs(n_obs, band_mix)
-
-        if presorted:
-            norm_time = normalize_time(time).astype(np.float32)
-            idx = np.argsort(norm_time)
-            time, mag, magerr, band = time[idx], mag[idx], magerr[idx], band[idx]
-
-        self.time = time
-        self.mag = mag
-        self.magerr = magerr
-        self.band = band
-
-    def time_infer(self, n_obs, band_mix, presorted):
-        """Full pipeline including ONNX inference."""
-        self.model(self.time, self.mag, self.magerr, self.band, presorted=presorted)
