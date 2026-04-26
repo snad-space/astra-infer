@@ -324,10 +324,32 @@ class Infer:
     onnx_file : str or Path
         Path to the ONNX model file.  The session is created once and reused
         for every call.
+    providers : list of str, optional
+        Execution providers passed to :class:`onnxruntime.InferenceSession`,
+        e.g. ``["CUDAExecutionProvider", "CPUExecutionProvider"]``.
+        Defaults to the onnxruntime default (CPU).
+    provider_options : list of dict, optional
+        Per-provider option dicts, passed as the ``provider_options`` argument
+        to :class:`onnxruntime.InferenceSession`.
+    sess_options : onnxruntime.SessionOptions, optional
+        Session-level options (thread counts, graph optimisation level, etc.)
+        passed to :class:`onnxruntime.InferenceSession`.
     """
 
-    def __init__(self, onnx_file: str | Path) -> None:
-        self._session = ort.InferenceSession(onnx_file)
+    def __init__(
+        self,
+        onnx_file: str | Path,
+        *,
+        providers: list[str] | None = None,
+        provider_options: list[dict] | None = None,
+        sess_options: ort.SessionOptions | None = None,
+    ) -> None:
+        self._session = ort.InferenceSession(
+            onnx_file,
+            sess_options=sess_options,
+            providers=providers,
+            provider_options=provider_options,
+        )
 
     def predict(
         self,
