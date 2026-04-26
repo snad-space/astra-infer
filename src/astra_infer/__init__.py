@@ -1,12 +1,10 @@
 from ._version import __version__
-from .infer import BANDS, SEQUENCE_LENGTH, AstraInfer, infer, preprocess_lc, preprocess_many
+from .infer import BANDS, SEQUENCE_LENGTH, Infer, Inputs
 
 __all__ = [
     "__version__",
     "BANDS",
     "SEQUENCE_LENGTH",
-    "AstraInfer",
-    "infer",
-    "preprocess_lc",
-    "preprocess_many",
+    "Infer",
+    "Inputs",
 ]

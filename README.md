@@ -31,32 +31,55 @@ Pre-processing steps:
 pip install astra_infer
 ```
 
+For PyArrow support:
+
+```bash
+pip install "astra_infer[arrow]"
+```
+
 ## Quick start
 
 ```python
 import numpy as np
-from astra_infer import AstraInfer
+from astra_infer import Infer, Inputs
 
 # Load the model once — the ONNX session is kept alive for repeated calls
-model = AstraInfer("path/to/model.onnx")
+model = Infer("path/to/model.onnx")
 
-# Run inference on a light curve
-embedding = model.predict_lc(time, mag, magerr, band)   # → ndarray shape (1, 512)
+# Pre-process, then infer
+inputs = Inputs.from_lc(time, mag, magerr, band)
+embedding = model.predict(inputs)   # → ndarray shape (1, 512)
 ```
 
 If your observations are already sorted by time you can skip the internal sort:
 
 ```python
-embedding = model.predict_lc(time, mag, magerr, band, presorted=True)
+inputs = Inputs.from_lc(time, mag, magerr, band, presorted=True)
 ```
 
-A convenience function is also available for one-off calls (creates a new session
-each time, so prefer `AstraInfer` for batch usage):
+## Batch inference
+
+Pre-process multiple light curves at once, then run a single batched ONNX call:
 
 ```python
-from astra_infer import infer
+lcs = [(time1, mag1, magerr1, band1), (time2, mag2, magerr2, band2), ...]
 
-embedding = infer("path/to/model.onnx", time, mag, magerr, band)
+inputs = Inputs.from_lcs(lcs)
+embeddings = model.predict(inputs)              # → ndarray shape (N, 512)
+embeddings = model.predict(inputs, batch_size=None)  # single ONNX call
+```
+
+`from_lcs` also accepts PyArrow containers (*list-of-struct* or *struct-of-lists*):
+
+```python
+# pa.ListArray / pa.ChunkedArray with struct value type, or pa.Table / pa.StructArray
+inputs = Inputs.from_lcs(arrow_lcs)
+
+# Custom column names
+inputs = Inputs.from_lcs(
+    arrow_lcs,
+    field_names={"time": "mjd", "mag": "psf_mag", "magerr": "psf_magerr", "band": "fid"},
+)
 ```
 
 ## Input format
