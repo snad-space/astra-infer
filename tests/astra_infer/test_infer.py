@@ -5,23 +5,24 @@ from astra_infer.infer import (
     BANDS,
     SEQUENCE_LENGTH,
     Infer,
-    Inputs,
+    preprocess_lc,
+    preprocess_many,
 )
 
 # ---------------------------------------------------------------------------
-# Inputs.from_lc
+# preprocess_lc
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("n", [32, 4098])
 def test_inputs_from_lc_shape(n):
-    """Inputs.from_lc returns tensors of the right shape for short and long LCs."""
+    """preprocess_lc returns tensors of the right shape for short and long LCs."""
     rng = np.random.default_rng(42)
     time = rng.uniform(58_000, 59_000, n)
     mag = rng.normal(loc=18, scale=1.0, size=n)
     magerr = np.full(n, 0.1)
     band = rng.choice(BANDS, size=n)
 
-    inputs = Inputs.from_lc(time, mag, magerr, band)
+    inputs = preprocess_lc(time, mag, magerr, band)
 
     assert inputs.norm_mag.shape == (1, SEQUENCE_LENGTH, 1)
     assert inputs.norm_time.shape == (1, SEQUENCE_LENGTH, 1)
@@ -42,31 +43,31 @@ def test_inputs_from_lc_presorted():
     idx = np.argsort(time)
     time_s, mag_s, magerr_s, band_s = time[idx], mag[idx], magerr[idx], band[idx]
 
-    result_auto = Inputs.from_lc(time, mag, magerr, band)
-    result_pre = Inputs.from_lc(time_s, mag_s, magerr_s, band_s, presorted=True)
+    result_auto = preprocess_lc(time, mag, magerr, band)
+    result_pre = preprocess_lc(time_s, mag_s, magerr_s, band_s, presorted=True)
 
     np.testing.assert_array_equal(result_auto.norm_mag, result_pre.norm_mag)
     np.testing.assert_array_equal(result_auto.norm_time, result_pre.norm_time)
 
 
 # ---------------------------------------------------------------------------
-# Inputs.from_lcs
+# preprocess_many
 # ---------------------------------------------------------------------------
 
 def test_inputs_from_lcs_shape():
-    """Inputs.from_lcs stacks individual from_lc results correctly."""
+    """preprocess_many stacks individual preprocess_lc results correctly."""
     rng = np.random.default_rng(3)
     lcs = [
         (rng.uniform(58_000, 59_000, n), rng.normal(18.0, 1.0, n), np.full(n, 0.1), rng.choice(BANDS, size=n))
         for n in [32, 700, 4096]
     ]
 
-    stacked = Inputs.from_lcs(lcs)
+    stacked = preprocess_many(lcs)
     assert stacked.norm_mag.shape == (3, SEQUENCE_LENGTH, 1)
     assert stacked.mask.shape == (3, SEQUENCE_LENGTH)
 
     for i, lc in enumerate(lcs):
-        single = Inputs.from_lc(*lc)
+        single = preprocess_lc(*lc)
         np.testing.assert_array_equal(single.norm_mag, stacked.norm_mag[[i]])
         np.testing.assert_array_equal(single.mask, stacked.mask[[i]])
 
@@ -84,7 +85,7 @@ def test_predict_single(onnx_file, n):
     magerr = np.full(n, 0.1)
     band = rng.choice(BANDS, size=n)
 
-    embeddings = Infer(onnx_file).predict(Inputs.from_lc(time, mag, magerr, band))
+    embeddings = Infer(onnx_file).predict(preprocess_lc(time, mag, magerr, band))
 
     assert embeddings.shape == (1, 512)
     assert np.all(np.isfinite(embeddings))
@@ -100,7 +101,7 @@ def test_predict_deterministic(onnx_file):
     band = rng.choice(BANDS, size=n)
 
     model = Infer(onnx_file)
-    inputs = Inputs.from_lc(time, mag, magerr, band)
+    inputs = preprocess_lc(time, mag, magerr, band)
 
     np.testing.assert_array_equal(model.predict(inputs), model.predict(inputs))
 
@@ -117,13 +118,13 @@ def test_predict_batch(onnx_file, n_curves, batch_size):
     ]
 
     model = Infer(onnx_file)
-    batch_embeddings = model.predict(Inputs.from_lcs(lcs), batch_size=batch_size)
+    batch_embeddings = model.predict(preprocess_many(lcs), batch_size=batch_size)
 
     assert batch_embeddings.shape == (n_curves, 512)
     assert np.all(np.isfinite(batch_embeddings))
 
     for i, lc in enumerate(lcs):
-        single = model.predict(Inputs.from_lc(*lc))
+        single = model.predict(preprocess_lc(*lc))
         np.testing.assert_array_equal(batch_embeddings[i], single[0])
 
 
@@ -172,15 +173,15 @@ def _make_table(lcs):
 @pytest.mark.parametrize("make_arrow", [_make_list_struct, _make_table],
                          ids=["list_struct", "table"])
 def test_inputs_from_lcs_arrow_matches_sequence(make_arrow):
-    """Inputs.from_lcs with Arrow input matches sequence-of-tuples result."""
+    """preprocess_many with Arrow input matches sequence-of-tuples result."""
     rng = np.random.default_rng(5)
     lcs = [
         (rng.uniform(58_000, 59_000, n), rng.normal(18.0, 1.0, n), np.full(n, 0.1), rng.choice(BANDS, size=n))
         for n in [32, 700, 4096]
     ]
 
-    result_seq = Inputs.from_lcs(lcs)
-    result_arrow = Inputs.from_lcs(make_arrow(lcs))
+    result_seq = preprocess_many(lcs)
+    result_arrow = preprocess_many(make_arrow(lcs))
 
     np.testing.assert_array_equal(result_seq.norm_mag, result_arrow.norm_mag)
     np.testing.assert_array_equal(result_seq.norm_time, result_arrow.norm_time)
@@ -189,7 +190,7 @@ def test_inputs_from_lcs_arrow_matches_sequence(make_arrow):
 
 
 def test_inputs_from_lcs_arrow_chunked():
-    """Inputs.from_lcs accepts a ChunkedArray of list-struct type."""
+    """preprocess_many accepts a ChunkedArray of list-struct type."""
     import pyarrow as pa
 
     rng = np.random.default_rng(9)
@@ -200,14 +201,14 @@ def test_inputs_from_lcs_arrow_chunked():
 
     chunked = pa.chunked_array([_make_list_struct(lcs)])
 
-    result_seq = Inputs.from_lcs(lcs)
-    result_arrow = Inputs.from_lcs(chunked)
+    result_seq = preprocess_many(lcs)
+    result_arrow = preprocess_many(chunked)
 
     np.testing.assert_array_equal(result_seq.norm_mag, result_arrow.norm_mag)
 
 
 def test_inputs_from_lcs_arrow_custom_field_names():
-    """Inputs.from_lcs accepts a custom field_names mapping."""
+    """preprocess_many accepts a custom field_names mapping."""
     import pyarrow as pa
 
     rng = np.random.default_rng(6)
@@ -224,8 +225,8 @@ def test_inputs_from_lcs_arrow_custom_field_names():
     arrow_lcs = pa.ListArray.from_arrays(pa.array([0, n], type=pa.int32()), flat_struct)
 
     custom_names = {"time": "mjd", "mag": "psf_mag", "magerr": "psf_magerr", "band": "fid"}
-    result_arrow = Inputs.from_lcs(arrow_lcs, field_names=custom_names)
-    result_seq = Inputs.from_lcs([(time, mag, magerr, band)])
+    result_arrow = preprocess_many(arrow_lcs, field_names=custom_names)
+    result_seq = preprocess_many([(time, mag, magerr, band)])
 
     np.testing.assert_array_equal(result_seq.norm_mag, result_arrow.norm_mag)
     np.testing.assert_array_equal(result_seq.mask, result_arrow.mask)

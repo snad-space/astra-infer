@@ -144,6 +144,8 @@ class Inputs:
     """Preprocessed light-curve tensors ready for ONNX inference.
 
     All arrays share the same batch axis ``N`` (one row per light curve).
+    Construct via :func:`preprocess_lc` (single light curve) or
+    :func:`preprocess_many` (multiple light curves).
 
     Attributes
     ----------
@@ -161,88 +163,6 @@ class Inputs:
     norm_time: np.ndarray
     lg_wave: np.ndarray
     mask: np.ndarray
-
-    @classmethod
-    def from_lc(
-        cls,
-        time: ArrayLike,
-        mag: ArrayLike,
-        magerr: ArrayLike,
-        band: ArrayLike,
-        *,
-        presorted: bool = False,
-    ) -> Inputs:
-        """Pre-process a single light curve.
-
-        Parameters
-        ----------
-        time : array-like
-            Observation times (MJD).
-        mag : array-like
-            Observed magnitudes.
-        magerr : array-like
-            Magnitude uncertainties.
-        band : array-like
-            Band labels — each element must be in ``BANDS``.
-        presorted : bool, optional
-            Skip the internal time sort when the input is already sorted.
-            Default is ``False``.
-
-        Returns
-        -------
-        Inputs
-            Preprocessed tensors with ``N = 1``.
-        """
-        return cls(*_preprocess_one(time, mag, magerr, band, presorted=presorted))
-
-    @classmethod
-    def from_lcs(
-        cls,
-        lcs: Sequence[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]] | Any,
-        *,
-        field_names: dict[str, str] | None = None,
-        presorted: bool = False,
-    ) -> Inputs:
-        """Pre-process multiple light curves into a single stacked :class:`Inputs`.
-
-        Accepts either a sequence of ``(time, mag, magerr, band)`` tuples or a
-        PyArrow container.  Supported Arrow layouts:
-
-        * ``pa.ListArray`` / ``pa.ChunkedArray`` with a struct value type
-          (*list-of-struct*): each element is a list of per-observation structs.
-        * ``pa.Table`` / ``pa.StructArray`` where each relevant column is a
-          ``ListArray`` of per-observation values (*struct-of-lists*).
-
-        Numeric Arrow columns are extracted as zero-copy NumPy views; the
-        string ``band`` column is sliced per-row to avoid full materialisation.
-
-        Parameters
-        ----------
-        lcs : sequence of (time, mag, magerr, band) tuples, or Arrow container
-            One light curve per element / row.
-        field_names : dict[str, str] or None, optional
-            Mapping from canonical names (``"time"``, ``"mag"``, ``"magerr"``,
-            ``"band"``) to the actual Arrow column / field names.  Only used
-            for Arrow inputs; defaults to the canonical names.
-        presorted : bool, optional
-            Skip the internal time sort when every light curve is already
-            sorted.  Default is ``False``.
-
-        Returns
-        -------
-        Inputs
-            Preprocessed tensors with ``N`` equal to the number of light
-            curves.
-        """
-        if field_names is not None or _is_arrow(lcs):
-            return cls(*_preprocess_arrow(lcs, field_names or _DEFAULT_FIELD_NAMES, presorted=presorted))
-        singles = [_preprocess_one(*lc, presorted=presorted) for lc in lcs]
-        return cls(
-            np.concatenate([s[0] for s in singles], axis=0),
-            np.concatenate([s[1] for s in singles], axis=0),
-            np.concatenate([s[2] for s in singles], axis=0),
-            np.concatenate([s[3] for s in singles], axis=0),
-        )
 
 
 def _preprocess_arrow(
@@ -295,6 +215,85 @@ def _preprocess_arrow(
     )
 
 
+def preprocess_lc(
+    time: ArrayLike,
+    mag: ArrayLike,
+    magerr: ArrayLike,
+    band: ArrayLike,
+    *,
+    presorted: bool = False,
+) -> Inputs:
+    """Pre-process a single light curve into ONNX-ready :class:`Inputs`.
+
+    Parameters
+    ----------
+    time : array-like
+        Observation times (MJD).
+    mag : array-like
+        Observed magnitudes.
+    magerr : array-like
+        Magnitude uncertainties.
+    band : array-like
+        Band labels — each element must be in ``BANDS``.
+    presorted : bool, optional
+        Skip the internal time sort when the input is already sorted.
+        Default is ``False``.
+
+    Returns
+    -------
+    Inputs
+        Preprocessed tensors with ``N = 1``.
+    """
+    return Inputs(*_preprocess_one(time, mag, magerr, band, presorted=presorted))
+
+
+def preprocess_many(
+    lcs: Sequence[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]] | Any,
+    *,
+    field_names: dict[str, str] | None = None,
+    presorted: bool = False,
+) -> Inputs:
+    """Pre-process multiple light curves into a single stacked :class:`Inputs`.
+
+    Accepts either a sequence of ``(time, mag, magerr, band)`` tuples or a
+    PyArrow container.  Supported Arrow layouts:
+
+    * ``pa.ListArray`` / ``pa.ChunkedArray`` with a struct value type
+      (*list-of-struct*): each element is a list of per-observation structs.
+    * ``pa.Table`` / ``pa.StructArray`` where each relevant column is a
+      ``ListArray`` of per-observation values (*struct-of-lists*).
+
+    Numeric Arrow columns are extracted as zero-copy NumPy views; the string
+    ``band`` column is sliced per-row to avoid full materialisation.
+
+    Parameters
+    ----------
+    lcs : sequence of (time, mag, magerr, band) tuples, or Arrow container
+        One light curve per element / row.
+    field_names : dict[str, str] or None, optional
+        Mapping from canonical names (``"time"``, ``"mag"``, ``"magerr"``,
+        ``"band"``) to the actual Arrow column / field names.  Only used for
+        Arrow inputs; defaults to the canonical names.
+    presorted : bool, optional
+        Skip the internal time sort when every light curve is already sorted.
+        Default is ``False``.
+
+    Returns
+    -------
+    Inputs
+        Preprocessed tensors with ``N`` equal to the number of light curves.
+    """
+    if field_names is not None or _is_arrow(lcs):
+        return Inputs(*_preprocess_arrow(lcs, field_names or _DEFAULT_FIELD_NAMES, presorted=presorted))
+    singles = [_preprocess_one(*lc, presorted=presorted) for lc in lcs]
+    return Inputs(
+        np.concatenate([s[0] for s in singles], axis=0),
+        np.concatenate([s[1] for s in singles], axis=0),
+        np.concatenate([s[2] for s in singles], axis=0),
+        np.concatenate([s[3] for s in singles], axis=0),
+    )
+
+
 class Infer:
     """Astra light-curve embedding model.
 
@@ -322,8 +321,8 @@ class Infer:
         Parameters
         ----------
         inputs : Inputs
-            Preprocessed tensors as returned by :meth:`Inputs.from_lc` or
-            :meth:`Inputs.from_lcs`.
+            Preprocessed tensors as returned by :func:`preprocess_lc` or
+            :func:`preprocess_many`.
         batch_size : int or None, optional
             Maximum number of light curves per ONNX call.  ``None`` passes all
             light curves in a single call.  Default is 128.

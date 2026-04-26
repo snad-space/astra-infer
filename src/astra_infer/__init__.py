@@ -1,5 +1,5 @@
 from ._version import __version__
-from .infer import BANDS, SEQUENCE_LENGTH, Infer, Inputs
+from .infer import BANDS, SEQUENCE_LENGTH, Infer, Inputs, preprocess_lc, preprocess_many
 
 __all__ = [
     "__version__",
@@ -7,4 +7,6 @@ __all__ = [
     "SEQUENCE_LENGTH",
     "Infer",
     "Inputs",
+    "preprocess_lc",
+    "preprocess_many",
 ]
