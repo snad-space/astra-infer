@@ -61,12 +61,12 @@ embedding = infer("path/to/model.onnx", time, mag, magerr, band)
 
 ## Input format
 
-| Array    | dtype   | Shape  | Description                                 |
-|----------|---------|--------|---------------------------------------------|
-| `time`   | float64 | (n,)   | Observation times in MJD                    |
-| `mag`    | float64 | (n,)   | PSF magnitudes                              |
-| `magerr` | float64 | (n,)   | 1-σ magnitude uncertainties                 |
-| `band`   | str     | (n,)   | Band labels — each element in `{"g","r","i"}` |
+| Array    | Shape  | Description                                    |
+|----------|--------|------------------------------------------------|
+| `time`   | (n,)   | Observation times in MJD (any numeric dtype)   |
+| `mag`    | (n,)   | PSF magnitudes (any numeric dtype)             |
+| `magerr` | (n,)   | 1-σ magnitude uncertainties (any numeric dtype)|
+| `band`   | (n,)   | Band labels — each element in `{"g","r","i"}`  |
 
 ## Development
 
