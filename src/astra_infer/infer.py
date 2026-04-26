@@ -36,6 +36,7 @@ _DEFAULT_FIELD_NAMES: dict[str, str] = {"time": "time", "mag": "mag", "magerr": 
 # Internal preprocessing helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalize_mag(mag: ArrayLike, magerr: ArrayLike) -> ArrayLike:
     weighted_mean = np.average(mag, weights=magerr**-2)
     return mag - weighted_mean
@@ -116,7 +117,7 @@ def _is_arrow(obj: Any) -> bool:
     try:
         import pyarrow as pa
 
-        return isinstance(obj, (pa.ListArray, pa.ChunkedArray, pa.Table, pa.StructArray))
+        return isinstance(obj, pa.ListArray | pa.ChunkedArray | pa.Table | pa.StructArray)
     except ImportError:
         return False
 
@@ -143,6 +144,7 @@ def _run_session(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class Inputs:
@@ -190,7 +192,7 @@ def _preprocess_arrow(
         offsets = lcs.offsets.to_numpy()
         flat_struct = lcs.values
         cols = {key: flat_struct.field(arrow_name) for key, arrow_name in field_names.items()}
-    elif isinstance(lcs, (pa.Table, pa.StructArray)):
+    elif isinstance(lcs, pa.Table | pa.StructArray):
         offsets = None
         cols = {}
         for key, arrow_name in field_names.items():
