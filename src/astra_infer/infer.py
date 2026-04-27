@@ -81,6 +81,9 @@ def _apply_strategy_to_bands(
             t_cut = time[0] if m_total > 0 else 0.0
         case "end" | "middle" | "window":
             if m_total > 0:
+                # How many observations will actually be selected: per band,
+                # it is min(available, seq_size).  Use this — not SEQUENCE_LENGTH —
+                # as the window size, because real g/r/i proportions vary.
                 n_wanted = sum(min(int(np.sum(band == b)), seq) for b, seq in SEQUENCE_PER_BAND.items())
                 max_start_idx = max(0, m_total - n_wanted)
                 match strategy:
