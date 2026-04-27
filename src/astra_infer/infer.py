@@ -67,24 +67,14 @@ def _apply_strategy_to_bands(
     dtype = mag.dtype
     m_total = len(time)
 
-    # Compute a global t_cut for window-based strategies.
-    #
-    # The valid start-index range is [0, max_start_idx], where max_start_idx
-    # ensures that, after the cut, each band still has as many observations as
-    # it can contribute (min(m_band, seq_band)).  n_wanted is the total number
-    # of observations that will actually be selected from this light curve —
-    # computed from the real per-band counts, not from the fixed model constant
-    # SEQUENCE_LENGTH, because observation proportions in real data differ from
-    # the model's 300 g + 350 r + 50 i layout.
     match strategy:
         case "beginning":
             t_cut = time[0] if m_total > 0 else 0.0
         case "end" | "middle" | "window":
             if m_total > 0:
-                # How many observations will actually be selected: per band,
-                # it is min(available, seq_size).  Use this — not SEQUENCE_LENGTH —
-                # as the window size, because real g/r/i proportions vary.
-                n_wanted = sum(min(int(np.sum(band == b)), seq) for b, seq in SEQUENCE_PER_BAND.items())
+                n_wanted = 0
+                for b, seq in SEQUENCE_PER_BAND.items():
+                    n_wanted += min(int(np.sum(band == b)), seq)
                 max_start_idx = max(0, m_total - n_wanted)
                 match strategy:
                     case "end":
