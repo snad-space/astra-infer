@@ -80,10 +80,10 @@ band, so selected observations overlap in time across bands.
 
 | Strategy | Description |
 |----------|-------------|
-| `"beginning"` (default) | Cut at the earliest observation (all obs included) |
-| `"end"` | Cut at global index `max(0, M−700)` — last 700 time slots |
-| `"middle"` | Cut at global index `max(0, (M−700)//2)` — centred window |
-| `"window"` | Cut time drawn uniformly over the valid range |
+| `"beginning"` (default) | Cut at the earliest observation |
+| `"end"` | Cut at `t_global[max(0, M−K)]` where *K* = total obs actually selected |
+| `"middle"` | Cut at `t_global[max(0, M−K) // 2]` — centred window |
+| `"window"` | Cut time drawn uniformly from `[t_global[0], t_global[max(0, M−K)]]` |
 | `"sample"` | Per-band random subsample without replacement |
 
 ## Batch inference

@@ -68,17 +68,30 @@ def _apply_strategy_to_bands(
     m_total = len(time)
 
     # Compute a global t_cut for window-based strategies.
+    #
+    # The valid start-index range is [0, max_start_idx], where max_start_idx
+    # ensures that, after the cut, each band still has as many observations as
+    # it can contribute (min(m_band, seq_band)).  n_wanted is the total number
+    # of observations that will actually be selected from this light curve —
+    # computed from the real per-band counts, not from the fixed model constant
+    # SEQUENCE_LENGTH, because observation proportions in real data differ from
+    # the model's 300 g + 350 r + 50 i layout.
     match strategy:
         case "beginning":
             t_cut = time[0] if m_total > 0 else 0.0
-        case "end":
-            t_cut = time[max(0, m_total - SEQUENCE_LENGTH)] if m_total > 0 else 0.0
-        case "middle":
-            t_cut = time[max(0, (m_total - SEQUENCE_LENGTH) // 2)] if m_total > 0 else 0.0
-        case "window":
-            # Draw t_cut uniformly from [t_global[0], t_global[max(0, M−700)]].
-            max_start_idx = max(0, m_total - SEQUENCE_LENGTH)
-            t_cut = rng.uniform(time[0], time[max_start_idx]) if m_total > 0 else 0.0
+        case "end" | "middle" | "window":
+            if m_total > 0:
+                n_wanted = sum(min(int(np.sum(band == b)), seq) for b, seq in SEQUENCE_PER_BAND.items())
+                max_start_idx = max(0, m_total - n_wanted)
+                match strategy:
+                    case "end":
+                        t_cut = time[max_start_idx]
+                    case "middle":
+                        t_cut = time[max_start_idx // 2]
+                    case "window":
+                        t_cut = rng.uniform(time[0], time[max_start_idx])
+            else:
+                t_cut = 0.0
         case "sample":
             t_cut = None  # handled per-band below
         case _:
@@ -334,12 +347,13 @@ def preprocess_lc(
         strategies:
 
         - ``"beginning"`` (default): *t_cut* = earliest observation.
-        - ``"end"``: *t_cut* = observation at global index
-          ``max(0, M − 700)``, selecting the last 700 time slots.
-        - ``"middle"``: *t_cut* = observation at global index
-          ``max(0, (M − 700) // 2)``, centring the window in time.
+        - ``"end"``: *t_cut* = ``t_global[max(0, M − K)]`` where *K* is
+          the total number of observations that will actually be selected
+          (``sum(min(m_band, seq_band) for each band)``).
+        - ``"middle"``: *t_cut* = ``t_global[max(0, M − K) // 2]``,
+          centring the window in time.
         - ``"window"``: *t_cut* drawn uniformly from
-          ``[t_global[0], t_global[max(0, M − 700)]]``.
+          ``[t_global[0], t_global[max(0, M − K)]]``.
         - ``"sample"``: per-band random subsample without replacement,
           sorted to preserve chronological order.
 
