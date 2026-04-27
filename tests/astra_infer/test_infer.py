@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-
 from astra_infer.infer import (
     BANDS,
     SEQUENCE_LENGTH,
@@ -12,6 +11,7 @@ from astra_infer.infer import (
 # ---------------------------------------------------------------------------
 # preprocess_lc
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("n", [32, 4098])
 def test_inputs_from_lc_shape(n):
@@ -54,6 +54,7 @@ def test_inputs_from_lc_presorted():
 # preprocess_many
 # ---------------------------------------------------------------------------
 
+
 def test_inputs_from_lcs_shape():
     """preprocess_many stacks individual preprocess_lc results correctly."""
     rng = np.random.default_rng(3)
@@ -75,6 +76,7 @@ def test_inputs_from_lcs_shape():
 # ---------------------------------------------------------------------------
 # Infer.predict
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("n", [32, 4098])
 def test_predict_single(onnx_file, n):
@@ -132,6 +134,7 @@ def test_predict_batch(onnx_file, n_curves, batch_size):
 # PyArrow helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_list_struct(lcs):
     """Build a pa.ListArray (list-of-struct) from a list of (time, mag, magerr, band) tuples."""
     import pyarrow as pa
@@ -146,8 +149,12 @@ def _make_list_struct(lcs):
         offsets.append(offsets[-1] + len(time))
 
     flat_struct = pa.StructArray.from_arrays(
-        [pa.concat_arrays(all_time), pa.concat_arrays(all_mag),
-         pa.concat_arrays(all_magerr), pa.concat_arrays(all_band)],
+        [
+            pa.concat_arrays(all_time),
+            pa.concat_arrays(all_mag),
+            pa.concat_arrays(all_magerr),
+            pa.concat_arrays(all_band),
+        ],
         names=["time", "mag", "magerr", "band"],
     )
     return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), flat_struct)
@@ -158,20 +165,22 @@ def _make_table(lcs):
     import pyarrow as pa
 
     times, mags, magerrs, bands = zip(*lcs, strict=True)
-    return pa.table({
-        "time": pa.array([list(t) for t in times]),
-        "mag": pa.array([list(m) for m in mags]),
-        "magerr": pa.array([list(me) for me in magerrs]),
-        "band": pa.array([list(b) for b in bands]),
-    })
+    return pa.table(
+        {
+            "time": pa.array([list(t) for t in times]),
+            "mag": pa.array([list(m) for m in mags]),
+            "magerr": pa.array([list(me) for me in magerrs]),
+            "band": pa.array([list(b) for b in bands]),
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # Arrow tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("make_arrow", [_make_list_struct, _make_table],
-                         ids=["list_struct", "table"])
+
+@pytest.mark.parametrize("make_arrow", [_make_list_struct, _make_table], ids=["list_struct", "table"])
 def test_inputs_from_lcs_arrow_matches_sequence(make_arrow):
     """preprocess_many with Arrow input matches sequence-of-tuples result."""
     rng = np.random.default_rng(5)
