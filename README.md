@@ -74,13 +74,17 @@ embeddings = model.predict(inputs)  # → (1, 5, 512)
 
 Available strategies:
 
+For all strategies except `"sample"`, a single global cut time is derived from
+the full (all-band) sorted observation array and applied uniformly to every
+band, so selected observations overlap in time across bands.
+
 | Strategy | Description |
 |----------|-------------|
-| `"beginning"` (default) | Chronologically first observations per band |
-| `"end"` | Chronologically last observations per band |
-| `"middle"` | Centre of the observation sequence by index |
-| `"window"` | Random contiguous window — cut time drawn uniformly |
-| `"sample"` | Random subsample without replacement, chronologically sorted |
+| `"beginning"` (default) | Cut at the earliest observation (all obs included) |
+| `"end"` | Cut at global index `max(0, M−700)` — last 700 time slots |
+| `"middle"` | Cut at global index `max(0, (M−700)//2)` — centred window |
+| `"window"` | Cut time drawn uniformly over the valid range |
+| `"sample"` | Per-band random subsample without replacement |
 
 ## Batch inference
 

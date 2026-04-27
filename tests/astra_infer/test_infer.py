@@ -95,22 +95,22 @@ def test_deterministic_strategies_require_no_rng(strategy):
     np.testing.assert_array_equal(a.norm_mag, b.norm_mag)
 
 
-def test_beginning_takes_first_obs():
-    """'beginning' selects the first N observations (chronologically)."""
+def test_beginning_end_differ_for_long_lc():
+    """'beginning' and 'end' select different time windows for a long LC."""
     lc = _make_lc(800, np.random.default_rng(4))
     beg = preprocess_lc(*lc, strategies="beginning")
     end = preprocess_lc(*lc, strategies="end")
-    # For a long LC the two windows differ.
     assert not np.array_equal(beg.norm_mag, end.norm_mag)
 
 
-def test_end_short_lc_same_as_beginning():
-    """For a short LC (n < seq_size for every band), 'end' equals 'beginning'."""
-    # 10 obs total — far fewer than 300/350/50 per band.
+def test_short_lc_all_strategies_same_as_beginning():
+    """For a short LC (M < 700 globally), all window strategies equal 'beginning'."""
+    # 10 obs total — fewer than SEQUENCE_LENGTH, so t_cut = time[0] for all.
     lc = _make_lc(10, np.random.default_rng(5))
     beg = preprocess_lc(*lc, strategies="beginning")
-    end = preprocess_lc(*lc, strategies="end")
-    np.testing.assert_array_equal(beg.norm_mag, end.norm_mag)
+    for strategy in ("end", "middle", "window"):
+        result = preprocess_lc(*lc, strategies=strategy, rng=0)
+        np.testing.assert_array_equal(beg.norm_mag, result.norm_mag, err_msg=f"strategy={strategy!r}")
 
 
 def test_window_strategy_reproducible_with_rng():

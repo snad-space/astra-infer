@@ -48,51 +48,6 @@ def _normalize_time(time: ArrayLike) -> ArrayLike:
     return time - MJD_OFFSET
 
 
-def _select_band_obs(
-    mag_b: np.ndarray,
-    time_b: np.ndarray,
-    seq_size: int,
-    strategy: str,
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Select observations from a single band using the given strategy.
-
-    Input arrays are already filtered to this band and time-sorted.
-    Returns selected (mag, time) arrays of length at most ``seq_size``.
-    Padding is applied separately by the caller.
-    """
-    m = len(mag_b)
-    if m == 0:
-        return mag_b, time_b
-    match strategy:
-        case "beginning":
-            return mag_b[:seq_size], time_b[:seq_size]
-        case "end":
-            start = max(0, m - seq_size)
-            return mag_b[start:], time_b[start:]
-        case "middle":
-            if m <= seq_size:
-                return mag_b, time_b
-            center = m // 2
-            half = seq_size // 2
-            start = max(0, min(center - half, m - seq_size))
-            return mag_b[start : start + seq_size], time_b[start : start + seq_size]
-        case "window":
-            # Draw t_cut uniformly from [t_band[0], t_band[max(0, m-seq_size)]].
-            # All observations at time >= t_cut are kept; at most seq_size are taken.
-            max_start_idx = max(0, m - seq_size)
-            t_cut = rng.uniform(time_b[0], time_b[max_start_idx])
-            sel = time_b >= t_cut
-            return mag_b[sel][:seq_size], time_b[sel][:seq_size]
-        case "sample":
-            # Draw min(m, seq_size) indices without replacement, keep chronological order.
-            n_sel = min(m, seq_size)
-            idx = np.sort(rng.choice(m, size=n_sel, replace=False))
-            return mag_b[idx], time_b[idx]
-        case _:
-            raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
-
-
 def _apply_strategy_to_bands(
     mag: np.ndarray,
     time: np.ndarray,
@@ -100,8 +55,35 @@ def _apply_strategy_to_bands(
     strategy: str,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Apply a subsampling strategy to all bands; return concatenated (700,) arrays."""
+    """Apply a subsampling strategy to all bands; return concatenated (700,) arrays.
+
+    For ``"beginning"``, ``"end"``, ``"middle"``, and ``"window"``, a single
+    global cut time *t_cut* is derived from the full (all-band) sorted
+    observation array, then applied uniformly to every band.  This guarantees
+    that the selected observations overlap in time across bands.
+
+    For ``"sample"``, observations are drawn independently per band.
+    """
     dtype = mag.dtype
+    m_total = len(time)
+
+    # Compute a global t_cut for window-based strategies.
+    match strategy:
+        case "beginning":
+            t_cut = time[0] if m_total > 0 else 0.0
+        case "end":
+            t_cut = time[max(0, m_total - SEQUENCE_LENGTH)] if m_total > 0 else 0.0
+        case "middle":
+            t_cut = time[max(0, (m_total - SEQUENCE_LENGTH) // 2)] if m_total > 0 else 0.0
+        case "window":
+            # Draw t_cut uniformly from [t_global[0], t_global[max(0, M−700)]].
+            max_start_idx = max(0, m_total - SEQUENCE_LENGTH)
+            t_cut = rng.uniform(time[0], time[max_start_idx]) if m_total > 0 else 0.0
+        case "sample":
+            t_cut = None  # handled per-band below
+        case _:
+            raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
+
     result_mag, result_time, result_lg_wave, result_mask = [], [], [], []
     for band_name in BANDS:
         boolmask = band == band_name
@@ -109,7 +91,18 @@ def _apply_strategy_to_bands(
         seq_size = SEQUENCE_PER_BAND[band_name]
         lg_eff_wave = LG_EFF_WAVE[band_name]
 
-        mag_sel, time_sel = _select_band_obs(mag_b, time_b, seq_size, strategy, rng)
+        if strategy == "sample":
+            m = len(mag_b)
+            n_sel = min(m, seq_size)
+            if m > 0:
+                idx = np.sort(rng.choice(m, size=n_sel, replace=False))
+                mag_sel, time_sel = mag_b[idx], time_b[idx]
+            else:
+                mag_sel, time_sel = mag_b, time_b
+        else:
+            sel = time_b >= t_cut
+            mag_sel = mag_b[sel][:seq_size]
+            time_sel = time_b[sel][:seq_size]
 
         input_size = len(mag_sel)
         pad_size = seq_size - input_size
@@ -334,16 +327,21 @@ def preprocess_lc(
         (ZTF photometric bands, see https://www.ztf.caltech.edu).
     strategies : str or list of str, optional
         Subsampling strategy or list of strategies applied per band before
-        padding.  Available strategies:
+        padding.  For all strategies except ``"sample"``, a single global
+        cut time *t_cut* is derived from the full (all-band) sorted
+        observation array and applied uniformly to every band, so the
+        selected observations overlap in time across bands.  Available
+        strategies:
 
-        - ``"beginning"`` (default): chronologically first observations.
-        - ``"end"``: chronologically last observations.
-        - ``"middle"``: centre of the observation sequence by index.
-        - ``"window"``: random contiguous window — a cut time *t_cut* is
-          drawn uniformly from ``[t_band[0], t_band[max(0, M−N)]]``
-          (index-based, guaranteeing at least *N* observations remain).
-        - ``"sample"``: random subsample without replacement, sorted to
-          preserve chronological order.
+        - ``"beginning"`` (default): *t_cut* = earliest observation.
+        - ``"end"``: *t_cut* = observation at global index
+          ``max(0, M − 700)``, selecting the last 700 time slots.
+        - ``"middle"``: *t_cut* = observation at global index
+          ``max(0, (M − 700) // 2)``, centring the window in time.
+        - ``"window"``: *t_cut* drawn uniformly from
+          ``[t_global[0], t_global[max(0, M − 700)]]``.
+        - ``"sample"``: per-band random subsample without replacement,
+          sorted to preserve chronological order.
 
     rng : int, numpy.random.Generator, or None, optional
         Seed or random number generator used by stochastic strategies
