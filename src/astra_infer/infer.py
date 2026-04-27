@@ -114,17 +114,16 @@ def _apply_strategy_to_bands(
         input_size = len(mag_sel)
         pad_size = seq_size - input_size
 
-        if pad_size <= 0:
-            result_mag.append(mag_sel)
-            result_time.append(time_sel)
-            result_lg_wave.append(np.full(seq_size, lg_eff_wave, dtype=dtype))
-            result_mask.append(np.zeros(seq_size, dtype=dtype))
-        else:
-            pad_val = np.zeros(pad_size, dtype=dtype)
-            result_mag.append(np.concatenate([mag_sel, pad_val]))
-            result_time.append(np.concatenate([time_sel, pad_val]))
-            result_lg_wave.append(np.concatenate([np.full(input_size, lg_eff_wave, dtype=dtype), pad_val]))
-            result_mask.append(np.concatenate([np.zeros(input_size, dtype=dtype), np.ones(pad_size, dtype=dtype)]))
+        result_mag.append(mag_sel)
+        result_time.append(time_sel)
+        result_lg_wave.append(np.full(input_size, lg_eff_wave, dtype=dtype))
+        result_mask.append(np.zeros(input_size, dtype=dtype))
+        if pad_size > 0:
+            pad_zeros = np.zeros(pad_size, dtype=dtype)
+            result_mag.append(pad_zeros)
+            result_time.append(pad_zeros)
+            result_lg_wave.append(pad_zeros)
+            result_mask.append(np.ones(pad_size, dtype=dtype))
 
     return (
         np.concatenate(result_mag),
