@@ -103,14 +103,13 @@ def test_beginning_end_differ_for_long_lc():
     assert not np.array_equal(beg.norm_mag, end.norm_mag)
 
 
-def test_short_lc_all_strategies_same_as_beginning():
-    """For a short LC (M < 700 globally), all window strategies equal 'beginning'."""
-    # 10 obs total — fewer than SEQUENCE_LENGTH, so t_cut = time[0] for all.
+def test_short_lc_end_same_as_beginning():
+    """For a short LC (m_band < seq_size for every band), 'end' equals 'beginning'."""
+    # 10 obs — far fewer than any per-band seq_size, so last == first per band.
     lc = _make_lc(10, np.random.default_rng(5))
     beg = preprocess_lc(*lc, strategies="beginning")
-    for strategy in ("end", "middle", "window"):
-        result = preprocess_lc(*lc, strategies=strategy, rng=0)
-        np.testing.assert_array_equal(beg.norm_mag, result.norm_mag, err_msg=f"strategy={strategy!r}")
+    end = preprocess_lc(*lc, strategies="end")
+    np.testing.assert_array_equal(beg.norm_mag, end.norm_mag)
 
 
 def test_window_strategy_reproducible_with_rng():

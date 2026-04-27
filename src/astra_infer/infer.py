@@ -57,37 +57,28 @@ def _apply_strategy_to_bands(
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Apply a subsampling strategy to all bands; return concatenated (700,) arrays.
 
-    For ``"beginning"``, ``"end"``, ``"middle"``, and ``"window"``, a single
-    global cut time *t_cut* is derived from the full (all-band) sorted
-    observation array, then applied uniformly to every band.  This guarantees
-    that the selected observations overlap in time across bands.
-
-    For ``"sample"``, observations are drawn independently per band.
+    ``"beginning"`` and ``"end"`` select per-band (first / last *seq_size*
+    observations).  ``"middle"`` and ``"window"`` derive a single global cut
+    time from the full sorted observation array and apply it to every band,
+    ensuring temporal overlap across bands.  ``"sample"`` draws per-band.
     """
     dtype = mag.dtype
     m_total = len(time)
 
-    match strategy:
-        case "beginning":
-            t_cut = time[0] if m_total > 0 else 0.0
-        case "end" | "middle" | "window":
-            if m_total > 0:
-                counts = [min(np.count_nonzero(band == b), seq) for b, seq in SEQUENCE_PER_BAND.items()]
-                n_wanted = sum(counts)
-                max_start_idx = max(0, m_total - n_wanted)
-                match strategy:
-                    case "end":
-                        t_cut = time[max_start_idx]
-                    case "middle":
-                        t_cut = time[max_start_idx // 2]
-                    case "window":
-                        t_cut = rng.uniform(time[0], time[max_start_idx])
-            else:
-                t_cut = 0.0
-        case "sample":
-            t_cut = None  # handled per-band below
-        case _:
-            raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
+    # For "middle" and "window", derive a global cut time from the full sorted
+    # observation array so all bands share the same temporal window.
+    # "beginning" and "end" select per-band (first / last seq_size obs) because
+    # a meaningful global cut for those would depend on where each band's
+    # observations fall in time — which varies per light curve.
+    if strategy == "middle" and m_total > 0:
+        t_cut: float = time[m_total // 2]
+    elif strategy == "window" and m_total > 0:
+        t_cut = rng.uniform(time[0], time[-1])
+    else:
+        t_cut = 0.0  # unused for "beginning", "end", "sample"
+
+    if strategy not in _STRATEGIES:
+        raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
 
     result_mag, result_time, result_lg_wave, result_mask = [], [], [], []
     for band_name in BANDS:
@@ -95,19 +86,24 @@ def _apply_strategy_to_bands(
         mag_b, time_b = mag[boolmask], time[boolmask]
         seq_size = SEQUENCE_PER_BAND[band_name]
         lg_eff_wave = LG_EFF_WAVE[band_name]
+        m = len(mag_b)
 
-        if strategy == "sample":
-            m = len(mag_b)
-            n_sel = min(m, seq_size)
-            if m > 0:
-                idx = np.sort(rng.choice(m, size=n_sel, replace=False))
+        match strategy:
+            case "beginning":
+                mag_sel, time_sel = mag_b[:seq_size], time_b[:seq_size]
+            case "end":
+                start = max(0, m - seq_size)
+                mag_sel, time_sel = mag_b[start:], time_b[start:]
+            case "middle" | "window":
+                sel = time_b >= t_cut
+                mag_sel = mag_b[sel][:seq_size]
+                time_sel = time_b[sel][:seq_size]
+            case "sample":
+                n_sel = min(m, seq_size)
+                idx = np.sort(rng.choice(m, size=n_sel, replace=False)) if m > 0 else np.array([], dtype=int)
                 mag_sel, time_sel = mag_b[idx], time_b[idx]
-            else:
-                mag_sel, time_sel = mag_b, time_b
-        else:
-            sel = time_b >= t_cut
-            mag_sel = mag_b[sel][:seq_size]
-            time_sel = time_b[sel][:seq_size]
+            case _:
+                raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
 
         input_size = len(mag_sel)
         pad_size = seq_size - input_size
@@ -338,14 +334,14 @@ def preprocess_lc(
         selected observations overlap in time across bands.  Available
         strategies:
 
-        - ``"beginning"`` (default): *t_cut* = earliest observation.
-        - ``"end"``: *t_cut* = ``t_global[max(0, M − K)]`` where *K* is
-          the total number of observations that will actually be selected
-          (``sum(min(m_band, seq_band) for each band)``).
-        - ``"middle"``: *t_cut* = ``t_global[max(0, M − K) // 2]``,
-          centring the window in time.
-        - ``"window"``: *t_cut* drawn uniformly from
-          ``[t_global[0], t_global[max(0, M − K)]]``.
+        - ``"beginning"`` (default): per-band, chronologically first
+          observations.
+        - ``"end"``: per-band, chronologically last observations.
+        - ``"middle"``: global cut at ``t_global[M // 2]``; per-band,
+          first *seq_size* observations after the cut.
+        - ``"window"``: global cut drawn uniformly from
+          ``[t_global[0], t_global[M − 1]]``; per-band, first *seq_size*
+          observations after the cut.
         - ``"sample"``: per-band random subsample without replacement,
           sorted to preserve chronological order.
 
