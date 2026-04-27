@@ -1,4 +1,38 @@
 {
+    "benchmarks.PreprocessingBenchmarks.time_apply_strategy_beginning": {
+        "code": "class PreprocessingBenchmarks:\n    def time_apply_strategy_beginning(self, n_obs, band_mix, presorted):\n        \"\"\"``_apply_strategy_to_bands`` with ``'beginning'`` (inputs already normalised and sorted).\"\"\"\n        norm_mag = _normalize_mag(self.mag, self.magerr).astype(np.float32)\n        norm_time = _normalize_time(self.time).astype(np.float32)\n        _apply_strategy_to_bands(norm_mag, norm_time, self.band, \"beginning\", np.random.default_rng(None))\n\n    def setup(self, n_obs, band_mix, presorted):\n        \"\"\"Prepare raw (and optionally pre-sorted) input arrays.\"\"\"\n        time, mag, magerr, band = _make_inputs(n_obs, band_mix)\n    \n        if presorted:\n            norm_time = _normalize_time(time).astype(np.float32)\n            idx = np.argsort(norm_time)\n            time, mag, magerr, band = time[idx], mag[idx], magerr[idx], band[idx]\n    \n        self.time = time\n        self.mag = mag\n        self.magerr = magerr\n        self.band = band",
+        "min_run_count": 2,
+        "name": "benchmarks.PreprocessingBenchmarks.time_apply_strategy_beginning",
+        "number": 0,
+        "param_names": [
+            "n_obs",
+            "band_mix",
+            "presorted"
+        ],
+        "params": [
+            [
+                "32",
+                "700",
+                "4096"
+            ],
+            [
+                "'balanced'",
+                "'g_only'",
+                "'ri_only'"
+            ],
+            [
+                "False",
+                "True"
+            ]
+        ],
+        "repeat": 0,
+        "rounds": 2,
+        "sample_time": 0.01,
+        "type": "time",
+        "unit": "seconds",
+        "version": "f2c9d6cfbc73aef66f39e5ccbdddefcd31242e33482869f4adad191e324d318f",
+        "warmup_time": -1
+    },
     "benchmarks.PreprocessingBenchmarks.time_argsort": {
         "code": "class PreprocessingBenchmarks:\n    def time_argsort(self, n_obs, band_mix, presorted):\n        \"\"\"Time-sort step only (skipped when ``presorted=True``).\"\"\"\n        if presorted:\n            return\n        norm_time = _normalize_time(self.time).astype(np.float32)\n        np.argsort(norm_time)\n\n    def setup(self, n_obs, band_mix, presorted):\n        \"\"\"Prepare raw (and optionally pre-sorted) input arrays.\"\"\"\n        time, mag, magerr, band = _make_inputs(n_obs, band_mix)\n    \n        if presorted:\n            norm_time = _normalize_time(time).astype(np.float32)\n            idx = np.argsort(norm_time)\n            time, mag, magerr, band = time[idx], mag[idx], magerr[idx], band[idx]\n    \n        self.time = time\n        self.mag = mag\n        self.magerr = magerr\n        self.band = band",
         "min_run_count": 2,
@@ -31,40 +65,6 @@
         "type": "time",
         "unit": "seconds",
         "version": "6d071b1d317d6fef744a9872e186e357336517565ba2729766feafd57483be61",
-        "warmup_time": -1
-    },
-    "benchmarks.PreprocessingBenchmarks.time_first_window": {
-        "code": "class PreprocessingBenchmarks:\n    def time_first_window(self, n_obs, band_mix, presorted):\n        \"\"\"``_first_window`` only (inputs already normalised and sorted).\"\"\"\n        norm_mag = _normalize_mag(self.mag, self.magerr).astype(np.float32)\n        norm_time = _normalize_time(self.time).astype(np.float32)\n        _first_window(norm_mag, norm_time, self.band)\n\n    def setup(self, n_obs, band_mix, presorted):\n        \"\"\"Prepare raw (and optionally pre-sorted) input arrays.\"\"\"\n        time, mag, magerr, band = _make_inputs(n_obs, band_mix)\n    \n        if presorted:\n            norm_time = _normalize_time(time).astype(np.float32)\n            idx = np.argsort(norm_time)\n            time, mag, magerr, band = time[idx], mag[idx], magerr[idx], band[idx]\n    \n        self.time = time\n        self.mag = mag\n        self.magerr = magerr\n        self.band = band",
-        "min_run_count": 2,
-        "name": "benchmarks.PreprocessingBenchmarks.time_first_window",
-        "number": 0,
-        "param_names": [
-            "n_obs",
-            "band_mix",
-            "presorted"
-        ],
-        "params": [
-            [
-                "32",
-                "700",
-                "4096"
-            ],
-            [
-                "'balanced'",
-                "'g_only'",
-                "'ri_only'"
-            ],
-            [
-                "False",
-                "True"
-            ]
-        ],
-        "repeat": 0,
-        "rounds": 2,
-        "sample_time": 0.01,
-        "type": "time",
-        "unit": "seconds",
-        "version": "2cd86b4cf714753587cd0b50514043f9ece7f5e110fc443120db89be6925311b",
         "warmup_time": -1
     },
     "benchmarks.PreprocessingBenchmarks.time_normalize_mag": {
