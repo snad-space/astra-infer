@@ -92,12 +92,14 @@ def _apply_strategy_to_bands(
             case "beginning":
                 mag_sel, time_sel = mag_b[:seq_size], time_b[:seq_size]
             case "end":
-                start = max(0, m - seq_size)
-                mag_sel, time_sel = mag_b[start:], time_b[start:]
+                mag_sel, time_sel = mag_b[-seq_size:], time_b[-seq_size:]
             case "middle" | "window":
-                sel = time_b >= t_cut
-                mag_sel = mag_b[sel][:seq_size]
-                time_sel = time_b[sel][:seq_size]
+                # Find the per-band index closest to t_cut, then centre a
+                # seq_size window around it — clamped to [0, m-seq_size] so
+                # the window never runs past either end of the band array.
+                cut_idx = np.searchsorted(time_b, t_cut)
+                start = max(0, min(cut_idx - seq_size // 2, m - seq_size))
+                mag_sel, time_sel = mag_b[start : start + seq_size], time_b[start : start + seq_size]
             case "sample":
                 n_sel = min(m, seq_size)
                 idx = np.sort(rng.choice(m, size=n_sel, replace=False)) if m > 0 else np.array([], dtype=int)
