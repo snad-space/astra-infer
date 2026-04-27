@@ -16,8 +16,7 @@ https://asv.readthedocs.io/en/stable/writing_benchmarks.html.
 """
 
 import numpy as np
-
-from astra_infer.infer import BANDS, first_window, normalize_mag, normalize_time, preprocess
+from astra_infer.infer import BANDS, _first_window, _normalize_mag, _normalize_time, preprocess_lc
 
 _N_OBS = [32, 700, 4096]
 _BAND_MIXES = ["balanced", "g_only", "ri_only"]
@@ -58,7 +57,7 @@ class PreprocessingBenchmarks:
         time, mag, magerr, band = _make_inputs(n_obs, band_mix)
 
         if presorted:
-            norm_time = normalize_time(time).astype(np.float32)
+            norm_time = _normalize_time(time).astype(np.float32)
             idx = np.argsort(norm_time)
             time, mag, magerr, band = time[idx], mag[idx], magerr[idx], band[idx]
 
@@ -67,25 +66,23 @@ class PreprocessingBenchmarks:
         self.magerr = magerr
         self.band = band
 
-    def time_preprocess(self, n_obs, band_mix, presorted):
-        """Full pre-processing pipeline via the standalone preprocess()."""
-        preprocess(self.time, self.mag, self.magerr, self.band, presorted=presorted)
+    def time_preprocess_lc(self, n_obs, band_mix, presorted):
+        """Full pre-processing pipeline via preprocess_lc()."""
+        preprocess_lc(self.time, self.mag, self.magerr, self.band, presorted=presorted)
 
     def time_first_window(self, n_obs, band_mix, presorted):
-        """``first_window`` only (inputs already normalised and sorted)."""
-        norm_mag = normalize_mag(self.mag, self.magerr).astype(np.float32)
-        norm_time = normalize_time(self.time).astype(np.float32)
-        first_window(norm_mag, norm_time, self.band)
+        """``_first_window`` only (inputs already normalised and sorted)."""
+        norm_mag = _normalize_mag(self.mag, self.magerr).astype(np.float32)
+        norm_time = _normalize_time(self.time).astype(np.float32)
+        _first_window(norm_mag, norm_time, self.band)
 
     def time_normalize_mag(self, n_obs, band_mix, presorted):
         """Magnitude normalisation only."""
-        normalize_mag(self.mag, self.magerr)
+        _normalize_mag(self.mag, self.magerr)
 
     def time_argsort(self, n_obs, band_mix, presorted):
         """Time-sort step only (skipped when ``presorted=True``)."""
         if presorted:
             return
-        norm_time = normalize_time(self.time).astype(np.float32)
+        norm_time = _normalize_time(self.time).astype(np.float32)
         np.argsort(norm_time)
-
-
