@@ -72,7 +72,7 @@ def _apply_strategy_to_bands(
             t_cut = time[0] if m_total > 0 else 0.0
         case "end" | "middle" | "window":
             if m_total > 0:
-                counts = [min(np.sum(band == b), seq) for b, seq in SEQUENCE_PER_BAND.items()]
+                counts = [min(np.count_nonzero(band == b), seq) for b, seq in SEQUENCE_PER_BAND.items()]
                 n_wanted = sum(counts)
                 max_start_idx = max(0, m_total - n_wanted)
                 match strategy:
