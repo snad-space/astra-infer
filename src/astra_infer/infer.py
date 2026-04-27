@@ -31,6 +31,9 @@ assert list(BANDS) == list(LG_EFF_WAVE.keys())
 
 _DEFAULT_FIELD_NAMES: dict[str, str] = {"time": "time", "mag": "mag", "magerr": "magerr", "band": "band"}
 
+_STRATEGIES = frozenset({"beginning", "end", "middle", "window", "sample"})
+_STOCHASTIC_STRATEGIES = frozenset({"window", "sample"})
+
 
 # ---------------------------------------------------------------------------
 # Internal preprocessing helpers
@@ -46,51 +49,99 @@ def _normalize_time(time: ArrayLike) -> ArrayLike:
     return time - MJD_OFFSET
 
 
-def _single_band_window(
-    mag: ArrayLike, time: ArrayLike, band: ArrayLike, band_name: str
-) -> tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]:
-    boolmask = band == band_name
-    mag, time = mag[boolmask], time[boolmask]
+def _cut_range(band: np.ndarray, m_total: int) -> tuple[int, int]:
+    """Return valid (min_cut, max_cut) observation-index range for the window strategy."""
+    min_cuts, max_cuts = [], []
+    for b, seq in SEQUENCE_PER_BAND.items():
+        half = seq // 2
+        obs = np.where(band == b)[0]
+        if 0 < half <= len(obs):
+            min_cuts.append(int(obs[half - 1]) + 1)
+            max_cuts.append(int(obs[-half]))
+    min_cut = min(min_cuts, default=0)
+    max_cut = max(max(max_cuts, default=m_total - 1), min_cut)
+    return min_cut, max_cut
 
+
+def _apply_strategy_to_bands(
+    mag: np.ndarray,
+    time: np.ndarray,
+    band: np.ndarray,
+    strategy: str,
+    rng: np.random.Generator | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Apply a subsampling strategy to all bands; return concatenated (700,) arrays.
+
+    ``"beginning"`` and ``"end"`` select per-band (first / last *seq_size*
+    observations).  ``"middle"`` cuts at the midpoint of the full observation
+    array.  ``"window"`` draws a global cut index uniformly from the valid
+    range that ensures at least one band has *seq_size // 2* observations on
+    each side.  ``"sample"`` draws per-band.
+    """
     dtype = mag.dtype
-    input_size = mag.size
-    seq_size = SEQUENCE_PER_BAND[band_name]
-    pad_size = seq_size - input_size
-    lg_eff_wave = LG_EFF_WAVE[band_name]
+    m_total = len(time)
 
-    if pad_size <= 0:
-        return (
-            mag[:seq_size],
-            time[:seq_size],
-            np.full(seq_size, lg_eff_wave, dtype=dtype),
-            np.zeros(seq_size, dtype=dtype),
-        )
+    if strategy == "middle" and m_total > 0:
+        cut_global = m_total // 2
+    elif strategy == "window" and m_total > 0:
+        min_cut, max_cut = _cut_range(band, m_total)
+        cut_global = int(rng.integers(min_cut, max_cut + 1))
 
-    pad_val = np.zeros(pad_size, dtype=dtype)
+    result_mag, result_time, result_lg_wave, result_mask = [], [], [], []
+    for band_name in BANDS:
+        boolmask = band == band_name
+        mag_b, time_b = mag[boolmask], time[boolmask]
+        seq_size = SEQUENCE_PER_BAND[band_name]
+        lg_eff_wave = LG_EFF_WAVE[band_name]
+        m = len(mag_b)
+
+        match strategy:
+            case "beginning":
+                mag_sel, time_sel = mag_b[:seq_size], time_b[:seq_size]
+            case "end":
+                mag_sel, time_sel = mag_b[-seq_size:], time_b[-seq_size:]
+            case "middle" | "window":
+                # Per-band cut index = number of this band's obs before
+                # cut_global; centre a seq_size window around it.
+                cut_b = int(boolmask[:cut_global].sum())
+                start = max(0, min(cut_b - seq_size // 2, m - seq_size))
+                mag_sel = mag_b[start : start + seq_size]
+                time_sel = time_b[start : start + seq_size]
+            case "sample":
+                n_sel = min(m, seq_size)
+                idx = np.sort(rng.choice(m, size=n_sel, replace=False)) if m > 0 else np.array([], dtype=int)
+                mag_sel, time_sel = mag_b[idx], time_b[idx]
+            case _:
+                raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
+
+        input_size = len(mag_sel)
+        pad_size = seq_size - input_size
+
+        result_mag.append(mag_sel)
+        result_time.append(time_sel)
+        result_lg_wave.append(np.full(input_size, lg_eff_wave, dtype=dtype))
+        result_mask.append(np.zeros(input_size, dtype=dtype))
+        if pad_size > 0:
+            pad_zeros = np.zeros(pad_size, dtype=dtype)
+            result_mag.append(pad_zeros)
+            result_time.append(pad_zeros)
+            result_lg_wave.append(pad_zeros)
+            result_mask.append(np.ones(pad_size, dtype=dtype))
+
     return (
-        np.r_[mag, pad_val],
-        np.r_[time, pad_val],
-        np.r_[np.full(input_size, lg_eff_wave), pad_val],
-        np.r_[np.zeros(input_size, dtype=dtype), np.ones(pad_size, dtype=dtype)],
+        np.concatenate(result_mag),
+        np.concatenate(result_time),
+        np.concatenate(result_lg_wave),
+        np.concatenate(result_mask),
     )
 
 
 def _first_window(
     mag: ArrayLike, time: ArrayLike, band: ArrayLike
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    mag_, time_, lg_wave_, mask_ = [], [], [], []
-    for band_name in BANDS:
-        mag_b, time_b, lg_wave_b, mask_b = _single_band_window(mag, time, band, band_name)
-        mag_.append(mag_b)
-        time_.append(time_b)
-        lg_wave_.append(lg_wave_b)
-        mask_.append(mask_b)
-    return (
-        np.concatenate(mag_)[None, :, None],
-        np.concatenate(time_)[None, :, None],
-        np.concatenate(lg_wave_)[None, :, None],
-        np.concatenate(mask_)[None, :],
-    )
+    """Apply the ``'beginning'`` strategy; return ``(1, 700, 1)`` tensors."""
+    m, t, lw, mk = _apply_strategy_to_bands(mag, time, band, "beginning", None)
+    return m[None, :, None], t[None, :, None], lw[None, :, None], mk[None, :]
 
 
 def _preprocess_one(
@@ -99,8 +150,11 @@ def _preprocess_one(
     magerr: ArrayLike,
     band: ArrayLike,
     *,
+    strategies: list[str],
+    rng: np.random.Generator | None,
     presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Pre-process one light curve for every strategy. Returns ``(S, 700, 1)`` tensors."""
     norm_mag = _normalize_mag(mag, magerr).astype(np.float32)
     norm_time = _normalize_time(time).astype(np.float32)
 
@@ -110,7 +164,20 @@ def _preprocess_one(
         norm_mag = norm_mag[idx]
         band = band[idx]
 
-    return _first_window(norm_mag, norm_time, band)
+    all_mag, all_time, all_lg_wave, all_mask = [], [], [], []
+    for strategy in strategies:
+        m, t, lw, mk = _apply_strategy_to_bands(norm_mag, norm_time, band, strategy, rng)
+        all_mag.append(m)
+        all_time.append(t)
+        all_lg_wave.append(lw)
+        all_mask.append(mk)
+
+    return (
+        np.stack(all_mag)[:, :, None],  # (S, 700, 1)
+        np.stack(all_time)[:, :, None],  # (S, 700, 1)
+        np.stack(all_lg_wave)[:, :, None],  # (S, 700, 1)
+        np.stack(all_mask),  # (S, 700)
+    )
 
 
 def _is_arrow(obj: Any) -> bool:
@@ -151,7 +218,8 @@ class Inputs:
     """Preprocessed ZTF light-curve tensors ready for ONNX inference.
 
     Holds the four fixed-length arrays that the Astra embedding model expects.
-    All arrays share the same batch axis ``N`` (one row per light curve).
+    All arrays share batch axis ``N`` (one row per light curve) and strategy
+    axis ``S`` (one slice per subsampling strategy).
     Construct via :func:`preprocess_lc` (single light curve) or
     :func:`preprocess_many` (multiple light curves).
 
@@ -160,26 +228,31 @@ class Inputs:
 
     Attributes
     ----------
-    norm_mag : ndarray, shape (N, 700, 1)
+    norm_mag : ndarray, shape (N, S, 700, 1)
         Inverse-variance weighted mean-subtracted magnitudes.
-    norm_time : ndarray, shape (N, 700, 1)
+    norm_time : ndarray, shape (N, S, 700, 1)
         MJD times shifted by :data:`MJD_OFFSET`.
-    lg_wave : ndarray, shape (N, 700, 1)
+    lg_wave : ndarray, shape (N, S, 700, 1)
         log10 effective wavelength (Å) for each observation's ZTF band.
-    mask : ndarray, shape (N, 700)
+    mask : ndarray, shape (N, S, 700)
         Padding mask — ``1`` for padded positions, ``0`` for real observations.
+    n_strategies : int
+        Number of subsampling strategies *S*.
     """
 
     norm_mag: np.ndarray
     norm_time: np.ndarray
     lg_wave: np.ndarray
     mask: np.ndarray
+    n_strategies: int = 1
 
 
 def _preprocess_arrow(
     lcs: pa.ListArray | pa.ChunkedArray | pa.Table | pa.StructArray,
     field_names: dict[str, str],
     *,
+    strategies: list[str],
+    rng: np.random.Generator | None,
     presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Extract per-row slices from an Arrow container and preprocess each."""
@@ -215,14 +288,22 @@ def _preprocess_arrow(
         s, e = int(offsets[i]), int(offsets[i + 1])
         band_i = np.asarray(band_col.slice(s, e - s).to_pylist())
         singles.append(
-            _preprocess_one(time_flat[s:e], mag_flat[s:e], magerr_flat[s:e], band_i, presorted=presorted)
+            _preprocess_one(
+                time_flat[s:e],
+                mag_flat[s:e],
+                magerr_flat[s:e],
+                band_i,
+                strategies=strategies,
+                rng=rng,
+                presorted=presorted,
+            )
         )
 
     return (
-        np.concatenate([s[0] for s in singles], axis=0),
-        np.concatenate([s[1] for s in singles], axis=0),
-        np.concatenate([s[2] for s in singles], axis=0),
-        np.concatenate([s[3] for s in singles], axis=0),
+        np.concatenate([s[0][None] for s in singles], axis=0),  # (N, S, 700, 1)
+        np.concatenate([s[1][None] for s in singles], axis=0),
+        np.concatenate([s[2][None] for s in singles], axis=0),
+        np.concatenate([s[3][None] for s in singles], axis=0),  # (N, S, 700)
     )
 
 
@@ -232,6 +313,8 @@ def preprocess_lc(
     magerr: ArrayLike,
     band: ArrayLike,
     *,
+    strategies: str | list[str] = "beginning",
+    rng: int | np.random.Generator | None = None,
     presorted: bool = False,
 ) -> Inputs:
     """Pre-process a single ZTF light curve into ONNX-ready :class:`Inputs`.
@@ -239,6 +322,7 @@ def preprocess_lc(
     Applies inverse-variance weighted mean subtraction, time normalisation
     (offset by :data:`MJD_OFFSET`), optional chronological sorting, and
     per-band clipping / zero-padding to produce fixed-length tensors.
+    One set of tensors is produced per entry in ``strategies``.
 
     Parameters
     ----------
@@ -251,6 +335,32 @@ def preprocess_lc(
     band : array-like
         Band labels — each element must be one of ``{"g", "r", "i"}``
         (ZTF photometric bands, see https://www.ztf.caltech.edu).
+    strategies : str or list of str, optional
+        Subsampling strategy or list of strategies applied per band before
+        zero-padding to the fixed sequence length.  Available strategies:
+
+        - ``"beginning"`` (default): select the chronologically first
+          *seq_size* observations in each band independently.
+        - ``"end"``: select the chronologically last *seq_size* observations
+          in each band independently.
+        - ``"middle"``: place a global cut at the midpoint of the full
+          (all-band) sorted observation array.  Each band then selects a
+          window of *seq_size* observations centred on its own count of
+          observations before the cut, ensuring all bands share the same
+          temporal reference point.
+        - ``"window"``: same per-band windowing as ``"middle"``, but the
+          global cut index is drawn uniformly at random from a valid range.
+          The range is chosen so that at least one band has *seq_size // 2*
+          observations on each side of the cut.  Requires ``rng``.
+        - ``"sample"``: draw a random subset of up to *seq_size* observations
+          in each band independently (without replacement), then sort them
+          chronologically.  Requires ``rng``.
+
+    rng : int, numpy.random.Generator, or None, optional
+        Seed or random number generator used by stochastic strategies
+        (``"window"`` and ``"sample"``).  An integer is forwarded to
+        :func:`numpy.random.default_rng`.  ``None`` picks an unpredictable
+        seed.  Default is ``None``.
     presorted : bool, optional
         Skip the internal time sort when the input is already sorted.
         Default is ``False``.
@@ -258,15 +368,28 @@ def preprocess_lc(
     Returns
     -------
     Inputs
-        Preprocessed tensors with ``N = 1``.
+        Preprocessed tensors with shape ``(1, S, 700, …)`` where *S* is
+        ``len(strategies)``.
     """
-    return Inputs(*_preprocess_one(time, mag, magerr, band, presorted=presorted))
+    if isinstance(strategies, str):
+        strategies = [strategies]
+    rng = np.random.default_rng(rng) if not _STOCHASTIC_STRATEGIES.isdisjoint(strategies) else None
+    result = _preprocess_one(time, mag, magerr, band, strategies=strategies, rng=rng, presorted=presorted)
+    return Inputs(
+        result[0][None],  # (1, S, 700, 1)
+        result[1][None],
+        result[2][None],
+        result[3][None],  # (1, S, 700)
+        n_strategies=len(strategies),
+    )
 
 
 def preprocess_many(
     lcs: Sequence[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]] | Any,
     *,
     field_names: dict[str, str] | None = None,
+    strategies: str | list[str] = "beginning",
+    rng: int | np.random.Generator | None = None,
     presorted: bool = False,
 ) -> Inputs:
     """Pre-process multiple ZTF light curves into a single stacked :class:`Inputs`.
@@ -293,6 +416,12 @@ def preprocess_many(
         Mapping from canonical names (``"time"``, ``"mag"``, ``"magerr"``,
         ``"band"``) to the actual Arrow column / field names.  Only used for
         Arrow inputs; defaults to the canonical names.
+    strategies : str or list of str, optional
+        Subsampling strategy or list of strategies.  See :func:`preprocess_lc`
+        for available options.  Default is ``"beginning"``.
+    rng : int, numpy.random.Generator, or None, optional
+        Seed or random number generator for stochastic strategies.  See
+        :func:`preprocess_lc`.  Default is ``None``.
     presorted : bool, optional
         Skip the internal time sort when every light curve is already sorted.
         Default is ``False``.
@@ -300,16 +429,30 @@ def preprocess_many(
     Returns
     -------
     Inputs
-        Preprocessed tensors with ``N`` equal to the number of light curves.
+        Preprocessed tensors with shape ``(N, S, 700, …)`` where *N* is the
+        number of light curves and *S* is ``len(strategies)``.
     """
+    if isinstance(strategies, str):
+        strategies = [strategies]
+    rng = np.random.default_rng(rng) if not _STOCHASTIC_STRATEGIES.isdisjoint(strategies) else None
+
     if field_names is not None or _is_arrow(lcs):
-        return Inputs(*_preprocess_arrow(lcs, field_names or _DEFAULT_FIELD_NAMES, presorted=presorted))
-    singles = [_preprocess_one(*lc, presorted=presorted) for lc in lcs]
+        arrays = _preprocess_arrow(
+            lcs,
+            field_names or _DEFAULT_FIELD_NAMES,
+            strategies=strategies,
+            rng=rng,
+            presorted=presorted,
+        )
+        return Inputs(*arrays, n_strategies=len(strategies))
+
+    singles = [_preprocess_one(*lc, strategies=strategies, rng=rng, presorted=presorted) for lc in lcs]
     return Inputs(
-        np.concatenate([s[0] for s in singles], axis=0),
-        np.concatenate([s[1] for s in singles], axis=0),
-        np.concatenate([s[2] for s in singles], axis=0),
-        np.concatenate([s[3] for s in singles], axis=0),
+        np.concatenate([s[0][None] for s in singles], axis=0),  # (N, S, 700, 1)
+        np.concatenate([s[1][None] for s in singles], axis=0),
+        np.concatenate([s[2][None] for s in singles], axis=0),
+        np.concatenate([s[3][None] for s in singles], axis=0),  # (N, S, 700)
+        n_strategies=len(strategies),
     )
 
 
@@ -367,27 +510,31 @@ class Infer:
             Preprocessed tensors as returned by :func:`preprocess_lc` or
             :func:`preprocess_many`.
         batch_size : int or None, optional
-            Maximum number of light curves per ONNX call.  ``None`` passes all
-            light curves in a single call.  Default is 128.
+            Maximum number of (light curve × strategy) slices per ONNX call.
+            ``None`` passes all slices in a single call.  Default is 128.
 
         Returns
         -------
-        embeddings : ndarray, shape (N, 512)
-            One 512-d embedding per input light curve.
+        embeddings : ndarray, shape (N, S, 512)
+            One 512-d embedding per input light curve per strategy.
         """
+        n_lcs = inputs.norm_mag.shape[0]
+        n_strat = inputs.n_strategies
+        total = n_lcs * n_strat
+
+        # Flatten the strategy axis so ONNX sees a plain (N*S, 700, 1) batch.
+        mag = inputs.norm_mag.reshape(total, SEQUENCE_LENGTH, 1)
+        time = inputs.norm_time.reshape(total, SEQUENCE_LENGTH, 1)
+        lg = inputs.lg_wave.reshape(total, SEQUENCE_LENGTH, 1)
+        mask = inputs.mask.reshape(total, SEQUENCE_LENGTH)
+
         if batch_size is None:
-            return _run_session(self._session, inputs.norm_mag, inputs.norm_time, inputs.lg_wave, inputs.mask)
-        n = inputs.norm_mag.shape[0]
-        results = []
-        for start in range(0, n, batch_size):
-            sl = slice(start, start + batch_size)
-            results.append(
-                _run_session(
-                    self._session,
-                    inputs.norm_mag[sl],
-                    inputs.norm_time[sl],
-                    inputs.lg_wave[sl],
-                    inputs.mask[sl],
-                )
-            )
-        return np.concatenate(results, axis=0)
+            out = _run_session(self._session, mag, time, lg, mask)
+        else:
+            results = []
+            for start in range(0, total, batch_size):
+                sl = slice(start, start + batch_size)
+                results.append(_run_session(self._session, mag[sl], time[sl], lg[sl], mask[sl]))
+            out = np.concatenate(results, axis=0)
+
+        return out.reshape(n_lcs, n_strat, 512)
