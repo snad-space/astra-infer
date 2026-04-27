@@ -43,7 +43,7 @@ model = Infer("path/to/model.onnx")
 
 # Pre-process, then infer
 inputs = preprocess_lc(time, mag, magerr, band)
-embedding = model.predict(inputs)   # → ndarray shape (1, 512)
+embedding = model.predict(inputs)   # → ndarray shape (1, 1, 512)
 ```
 
 If your observations are already sorted by time you can skip the internal sort:
@@ -51,6 +51,36 @@ If your observations are already sorted by time you can skip the internal sort:
 ```python
 inputs = preprocess_lc(time, mag, magerr, band, presorted=True)
 ```
+
+## Subsampling strategies
+
+Apply one or more subsampling strategies to select a window of observations
+per band before padding.  `predict` always returns a 3-D array
+``(N, S, 512)`` — one embedding per light curve per strategy.
+
+```python
+# Single strategy (default: "beginning")
+inputs = preprocess_lc(time, mag, magerr, band, strategies="end")
+embedding = model.predict(inputs)   # → (1, 1, 512)
+
+# Multiple strategies in one call
+inputs = preprocess_lc(
+    time, mag, magerr, band,
+    strategies=["beginning", "end", "middle", "window", "sample"],
+    rng=42,          # seed for stochastic strategies
+)
+embeddings = model.predict(inputs)  # → (1, 5, 512)
+```
+
+Available strategies:
+
+| Strategy | Description |
+|----------|-------------|
+| `"beginning"` (default) | Chronologically first observations per band |
+| `"end"` | Chronologically last observations per band |
+| `"middle"` | Centre of the observation sequence by index |
+| `"window"` | Random contiguous window — cut time drawn uniformly |
+| `"sample"` | Random subsample without replacement, chronologically sorted |
 
 ## Batch inference
 
@@ -62,8 +92,12 @@ from astra_infer import Infer, preprocess_many
 lcs = [(time1, mag1, magerr1, band1), (time2, mag2, magerr2, band2), ...]
 
 inputs = preprocess_many(lcs)
-embeddings = model.predict(inputs)              # → ndarray shape (N, 512)
+embeddings = model.predict(inputs)              # → ndarray shape (N, 1, 512)
 embeddings = model.predict(inputs, batch_size=None)  # single ONNX call
+
+# Combine batch inference with multiple strategies
+inputs = preprocess_many(lcs, strategies=["beginning", "end"], rng=0)
+embeddings = model.predict(inputs)              # → ndarray shape (N, 2, 512)
 ```
 
 `preprocess_many` also accepts PyArrow containers (*list-of-struct* or *struct-of-lists*):

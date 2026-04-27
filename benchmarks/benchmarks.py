@@ -16,7 +16,7 @@ https://asv.readthedocs.io/en/stable/writing_benchmarks.html.
 """
 
 import numpy as np
-from astra_infer.infer import BANDS, _first_window, _normalize_mag, _normalize_time, preprocess_lc
+from astra_infer.infer import BANDS, _apply_strategy_to_bands, _normalize_mag, _normalize_time, preprocess_lc
 
 _N_OBS = [32, 700, 4096]
 _BAND_MIXES = ["balanced", "g_only", "ri_only"]
@@ -70,11 +70,11 @@ class PreprocessingBenchmarks:
         """Full pre-processing pipeline via preprocess_lc()."""
         preprocess_lc(self.time, self.mag, self.magerr, self.band, presorted=presorted)
 
-    def time_first_window(self, n_obs, band_mix, presorted):
-        """``_first_window`` only (inputs already normalised and sorted)."""
+    def time_apply_strategy_beginning(self, n_obs, band_mix, presorted):
+        """``_apply_strategy_to_bands`` with ``'beginning'`` (inputs already normalised and sorted)."""
         norm_mag = _normalize_mag(self.mag, self.magerr).astype(np.float32)
         norm_time = _normalize_time(self.time).astype(np.float32)
-        _first_window(norm_mag, norm_time, self.band)
+        _apply_strategy_to_bands(norm_mag, norm_time, self.band, "beginning", np.random.default_rng(None))
 
     def time_normalize_mag(self, n_obs, band_mix, presorted):
         """Magnitude normalisation only."""
