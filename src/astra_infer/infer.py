@@ -39,12 +39,6 @@ _STRATEGIES = frozenset({"beginning", "end", "middle", "window", "sample"})
 # ---------------------------------------------------------------------------
 
 
-def _resolve_rng(rng: int | np.random.Generator | None) -> np.random.Generator:
-    if isinstance(rng, np.random.Generator):
-        return rng
-    return np.random.default_rng(rng)
-
-
 def _normalize_mag(mag: ArrayLike, magerr: ArrayLike) -> ArrayLike:
     weighted_mean = np.average(mag, weights=magerr**-2)
     return mag - weighted_mean
@@ -68,31 +62,35 @@ def _select_band_obs(
     Padding is applied separately by the caller.
     """
     m = len(mag_b)
-    if m == 0 or strategy == "beginning":
-        return mag_b[:seq_size], time_b[:seq_size]
-    if strategy == "end":
-        start = max(0, m - seq_size)
-        return mag_b[start:], time_b[start:]
-    if strategy == "middle":
-        if m <= seq_size:
-            return mag_b, time_b
-        center = m // 2
-        half = seq_size // 2
-        start = max(0, min(center - half, m - seq_size))
-        return mag_b[start : start + seq_size], time_b[start : start + seq_size]
-    if strategy == "window":
-        # Draw t_cut uniformly from [t_band[0], t_band[max(0, m-seq_size)]].
-        # All observations at time >= t_cut are kept; at most seq_size are taken.
-        max_start_idx = max(0, m - seq_size)
-        t_cut = rng.uniform(time_b[0], time_b[max_start_idx])
-        sel = time_b >= t_cut
-        return mag_b[sel][:seq_size], time_b[sel][:seq_size]
-    if strategy == "sample":
-        # Draw min(m, seq_size) indices without replacement, keep chronological order.
-        n_sel = min(m, seq_size)
-        idx = np.sort(rng.choice(m, size=n_sel, replace=False))
-        return mag_b[idx], time_b[idx]
-    raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
+    if m == 0:
+        return mag_b, time_b
+    match strategy:
+        case "beginning":
+            return mag_b[:seq_size], time_b[:seq_size]
+        case "end":
+            start = max(0, m - seq_size)
+            return mag_b[start:], time_b[start:]
+        case "middle":
+            if m <= seq_size:
+                return mag_b, time_b
+            center = m // 2
+            half = seq_size // 2
+            start = max(0, min(center - half, m - seq_size))
+            return mag_b[start : start + seq_size], time_b[start : start + seq_size]
+        case "window":
+            # Draw t_cut uniformly from [t_band[0], t_band[max(0, m-seq_size)]].
+            # All observations at time >= t_cut are kept; at most seq_size are taken.
+            max_start_idx = max(0, m - seq_size)
+            t_cut = rng.uniform(time_b[0], time_b[max_start_idx])
+            sel = time_b >= t_cut
+            return mag_b[sel][:seq_size], time_b[sel][:seq_size]
+        case "sample":
+            # Draw min(m, seq_size) indices without replacement, keep chronological order.
+            n_sel = min(m, seq_size)
+            idx = np.sort(rng.choice(m, size=n_sel, replace=False))
+            return mag_b[idx], time_b[idx]
+        case _:
+            raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
 
 
 def _apply_strategy_to_bands(
@@ -123,10 +121,10 @@ def _apply_strategy_to_bands(
             result_mask.append(np.zeros(seq_size, dtype=dtype))
         else:
             pad_val = np.zeros(pad_size, dtype=dtype)
-            result_mag.append(np.r_[mag_sel, pad_val])
-            result_time.append(np.r_[time_sel, pad_val])
-            result_lg_wave.append(np.r_[np.full(input_size, lg_eff_wave, dtype=dtype), pad_val])
-            result_mask.append(np.r_[np.zeros(input_size, dtype=dtype), np.ones(pad_size, dtype=dtype)])
+            result_mag.append(np.concatenate([mag_sel, pad_val]))
+            result_time.append(np.concatenate([time_sel, pad_val]))
+            result_lg_wave.append(np.concatenate([np.full(input_size, lg_eff_wave, dtype=dtype), pad_val]))
+            result_mask.append(np.concatenate([np.zeros(input_size, dtype=dtype), np.ones(pad_size, dtype=dtype)]))
 
     return (
         np.concatenate(result_mag),
@@ -365,7 +363,7 @@ def preprocess_lc(
     """
     if isinstance(strategies, str):
         strategies = [strategies]
-    rng_ = _resolve_rng(rng)
+    rng_ = np.random.default_rng(rng)
     result = _preprocess_one(time, mag, magerr, band, strategies=strategies, rng=rng_, presorted=presorted)
     return Inputs(
         result[0][None],  # (1, S, 700, 1)
@@ -426,7 +424,7 @@ def preprocess_many(
     """
     if isinstance(strategies, str):
         strategies = [strategies]
-    rng_ = _resolve_rng(rng)
+    rng_ = np.random.default_rng(rng)
 
     if field_names is not None or _is_arrow(lcs):
         arrays = _preprocess_arrow(
