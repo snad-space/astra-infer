@@ -78,8 +78,8 @@ Available strategies:
 |----------|-------------|
 | `"beginning"` (default) | Per-band: chronologically first observations |
 | `"end"` | Per-band: chronologically last observations |
-| `"middle"` | Global cut at `t_global[M // 2]`; first *N* per band after cut |
-| `"window"` | Global cut drawn uniformly from `[t_global[0], t_global[M−1]]`; first *N* per band after cut |
+| `"middle"` | Global cut at the midpoint of all observations; per-band window of *N* centred around it |
+| `"window"` | Global cut drawn uniformly from a valid range; per-band window of *N* centred around it |
 | `"sample"` | Per-band random subsample without replacement |
 
 ## Batch inference

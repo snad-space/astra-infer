@@ -32,6 +32,7 @@ assert list(BANDS) == list(LG_EFF_WAVE.keys())
 _DEFAULT_FIELD_NAMES: dict[str, str] = {"time": "time", "mag": "mag", "magerr": "magerr", "band": "band"}
 
 _STRATEGIES = frozenset({"beginning", "end", "middle", "window", "sample"})
+_STOCHASTIC_STRATEGIES = frozenset({"window", "sample"})
 
 
 # ---------------------------------------------------------------------------
@@ -48,43 +49,43 @@ def _normalize_time(time: ArrayLike) -> ArrayLike:
     return time - MJD_OFFSET
 
 
+def _cut_range(band: np.ndarray, m_total: int) -> tuple[int, int]:
+    """Return valid (min_cut, max_cut) observation-index range for the window strategy."""
+    min_cuts, max_cuts = [], []
+    for b, seq in SEQUENCE_PER_BAND.items():
+        half = seq // 2
+        obs = np.where(band == b)[0]
+        if 0 < half <= len(obs):
+            min_cuts.append(int(obs[half - 1]) + 1)
+            max_cuts.append(int(obs[-half]))
+    min_cut = min(min_cuts, default=0)
+    max_cut = max(max(max_cuts, default=m_total - 1), min_cut)
+    return min_cut, max_cut
+
+
 def _apply_strategy_to_bands(
     mag: np.ndarray,
     time: np.ndarray,
     band: np.ndarray,
     strategy: str,
-    rng: np.random.Generator,
+    rng: np.random.Generator | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Apply a subsampling strategy to all bands; return concatenated (700,) arrays.
 
     ``"beginning"`` and ``"end"`` select per-band (first / last *seq_size*
-    observations).  ``"middle"`` and ``"window"`` pick a global cut index in
-    the sorted all-band array so every band shares the same temporal reference;
-    the valid index range ensures at least one band has *seq_size // 2*
-    observations on each side.  ``"sample"`` draws per-band.
+    observations).  ``"middle"`` cuts at the midpoint of the full observation
+    array.  ``"window"`` draws a global cut index uniformly from the valid
+    range that ensures at least one band has *seq_size // 2* observations on
+    each side.  ``"sample"`` draws per-band.
     """
     dtype = mag.dtype
     m_total = len(time)
 
-    # For "middle" and "window": work entirely with observation indices.
-    # Valid cut range [min_cut, max_cut]: at the lower bound at least one band
-    # has seq_size//2 obs to the left; at the upper bound at least one band
-    # has seq_size//2 obs to the right.
-    if strategy in ("middle", "window") and m_total > 0:
-        min_cuts, max_cuts = [], []
-        for b, seq in SEQUENCE_PER_BAND.items():
-            obs = np.where(band == b)[0]
-            half = seq // 2
-            if half > 0 and len(obs) >= half:
-                min_cuts.append(int(obs[half - 1]) + 1)
-                max_cuts.append(int(obs[-half]))
-        min_cut = min(min_cuts) if min_cuts else 0
-        max_cut = max(max(max_cuts) if max_cuts else m_total - 1, min_cut)
-
-        if strategy == "middle":
-            cut_global = (min_cut + max_cut) // 2
-        else:
-            cut_global = int(rng.integers(min_cut, max_cut + 1))
+    if strategy == "middle" and m_total > 0:
+        cut_global = m_total // 2
+    elif strategy == "window" and m_total > 0:
+        min_cut, max_cut = _cut_range(band, m_total)
+        cut_global = int(rng.integers(min_cut, max_cut + 1))
 
     result_mag, result_time, result_lg_wave, result_mask = [], [], [], []
     for band_name in BANDS:
@@ -139,7 +140,7 @@ def _first_window(
     mag: ArrayLike, time: ArrayLike, band: ArrayLike
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Apply the ``'beginning'`` strategy; return ``(1, 700, 1)`` tensors."""
-    m, t, lw, mk = _apply_strategy_to_bands(mag, time, band, "beginning", np.random.default_rng(None))
+    m, t, lw, mk = _apply_strategy_to_bands(mag, time, band, "beginning", None)
     return m[None, :, None], t[None, :, None], lw[None, :, None], mk[None, :]
 
 
@@ -150,7 +151,7 @@ def _preprocess_one(
     band: ArrayLike,
     *,
     strategies: list[str],
-    rng: np.random.Generator,
+    rng: np.random.Generator | None,
     presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Pre-process one light curve for every strategy. Returns ``(S, 700, 1)`` tensors."""
@@ -251,7 +252,7 @@ def _preprocess_arrow(
     field_names: dict[str, str],
     *,
     strategies: list[str],
-    rng: np.random.Generator,
+    rng: np.random.Generator | None,
     presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Extract per-row slices from an Arrow container and preprocess each."""
@@ -336,23 +337,24 @@ def preprocess_lc(
         (ZTF photometric bands, see https://www.ztf.caltech.edu).
     strategies : str or list of str, optional
         Subsampling strategy or list of strategies applied per band before
-        padding.  For all strategies except ``"sample"``, a single global
-        cut time *t_cut* is derived from the full (all-band) sorted
-        observation array and applied uniformly to every band, so the
-        selected observations overlap in time across bands.  Available
-        strategies:
+        zero-padding to the fixed sequence length.  Available strategies:
 
-        - ``"beginning"`` (default): per-band, chronologically first
-          observations.
-        - ``"end"``: per-band, chronologically last observations.
-        - ``"middle"``: global cut index at the midpoint of the valid
-          index range; per-band, *seq_size* observations centred around it.
-        - ``"window"``: global cut index drawn uniformly from the valid
-          index range; per-band, *seq_size* observations centred around it.
-          The valid range ensures at least one band has *seq_size // 2*
-          observations on each side of the cut.
-        - ``"sample"``: per-band random subsample without replacement,
-          sorted to preserve chronological order.
+        - ``"beginning"`` (default): select the chronologically first
+          *seq_size* observations in each band independently.
+        - ``"end"``: select the chronologically last *seq_size* observations
+          in each band independently.
+        - ``"middle"``: place a global cut at the midpoint of the full
+          (all-band) sorted observation array.  Each band then selects a
+          window of *seq_size* observations centred on its own count of
+          observations before the cut, ensuring all bands share the same
+          temporal reference point.
+        - ``"window"``: same per-band windowing as ``"middle"``, but the
+          global cut index is drawn uniformly at random from a valid range.
+          The range is chosen so that at least one band has *seq_size // 2*
+          observations on each side of the cut.  Requires ``rng``.
+        - ``"sample"``: draw a random subset of up to *seq_size* observations
+          in each band independently (without replacement), then sort them
+          chronologically.  Requires ``rng``.
 
     rng : int, numpy.random.Generator, or None, optional
         Seed or random number generator used by stochastic strategies
@@ -371,8 +373,8 @@ def preprocess_lc(
     """
     if isinstance(strategies, str):
         strategies = [strategies]
-    rng_ = np.random.default_rng(rng)
-    result = _preprocess_one(time, mag, magerr, band, strategies=strategies, rng=rng_, presorted=presorted)
+    rng = np.random.default_rng(rng) if not _STOCHASTIC_STRATEGIES.isdisjoint(strategies) else None
+    result = _preprocess_one(time, mag, magerr, band, strategies=strategies, rng=rng, presorted=presorted)
     return Inputs(
         result[0][None],  # (1, S, 700, 1)
         result[1][None],
@@ -432,19 +434,19 @@ def preprocess_many(
     """
     if isinstance(strategies, str):
         strategies = [strategies]
-    rng_ = np.random.default_rng(rng)
+    rng = np.random.default_rng(rng) if not _STOCHASTIC_STRATEGIES.isdisjoint(strategies) else None
 
     if field_names is not None or _is_arrow(lcs):
         arrays = _preprocess_arrow(
             lcs,
             field_names or _DEFAULT_FIELD_NAMES,
             strategies=strategies,
-            rng=rng_,
+            rng=rng,
             presorted=presorted,
         )
         return Inputs(*arrays, n_strategies=len(strategies))
 
-    singles = [_preprocess_one(*lc, strategies=strategies, rng=rng_, presorted=presorted) for lc in lcs]
+    singles = [_preprocess_one(*lc, strategies=strategies, rng=rng, presorted=presorted) for lc in lcs]
     return Inputs(
         np.concatenate([s[0][None] for s in singles], axis=0),  # (N, S, 700, 1)
         np.concatenate([s[1][None] for s in singles], axis=0),
