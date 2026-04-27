@@ -71,10 +71,9 @@ def _apply_strategy_to_bands(
     # has seq_size//2 obs to the left; at the upper bound at least one band
     # has seq_size//2 obs to the right.
     if strategy in ("middle", "window") and m_total > 0:
-        obs_global = {b: np.where(band == b)[0] for b in BANDS}
         min_cuts, max_cuts = [], []
         for b, seq in SEQUENCE_PER_BAND.items():
-            obs = obs_global[b]
+            obs = np.where(band == b)[0]
             half = seq // 2
             if half > 0 and len(obs) >= half:
                 min_cuts.append(int(obs[half - 1]) + 1)
@@ -101,9 +100,9 @@ def _apply_strategy_to_bands(
             case "end":
                 mag_sel, time_sel = mag_b[-seq_size:], time_b[-seq_size:]
             case "middle" | "window":
-                # Translate the global cut index to a per-band index, then
-                # centre a seq_size window around it (clamped to valid range).
-                cut_b = int(np.searchsorted(obs_global[band_name], cut_global))
+                # Per-band cut index = number of this band's obs before
+                # cut_global; centre a seq_size window around it.
+                cut_b = int(boolmask[:cut_global].sum())
                 start = max(0, min(cut_b - seq_size // 2, m - seq_size))
                 mag_sel = mag_b[start : start + seq_size]
                 time_sel = time_b[start : start + seq_size]
