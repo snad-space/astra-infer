@@ -10,7 +10,7 @@ import onnxruntime as ort
 from numpy.typing import ArrayLike
 
 if TYPE_CHECKING:
-    import pyarrow as pa
+    pass
 
 BANDS = np.array(["g", "r", "i"])
 """ZTF photometric bands accepted by the model."""
@@ -31,8 +31,8 @@ assert list(BANDS) == list(LG_EFF_WAVE.keys())
 
 _DEFAULT_FIELD_NAMES: dict[str, str] = {"time": "time", "mag": "mag", "magerr": "magerr", "band": "band"}
 
-_STRATEGIES = frozenset({"beginning", "end", "middle", "window", "sample"})
-_STOCHASTIC_STRATEGIES = frozenset({"window", "sample"})
+_SUBSAMPLING_METHODS = frozenset({"beginning", "end", "middle", "window", "sample"})
+_STOCHASTIC_SUBSAMPLING = frozenset({"window", "sample"})
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +41,8 @@ _STOCHASTIC_STRATEGIES = frozenset({"window", "sample"})
 
 
 def _normalize_mag(mag: ArrayLike, magerr: ArrayLike) -> ArrayLike:
+    if len(mag) == 0:
+        return np.empty(0, dtype=np.float32)
     weighted_mean = np.average(mag, weights=magerr**-2)
     return mag - weighted_mean
 
@@ -70,7 +72,7 @@ def _apply_strategy_to_bands(
     strategy: str,
     rng: np.random.Generator | None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Apply a subsampling strategy to all bands; return concatenated (700,) arrays.
+    """Apply a subsampling method to all bands; return concatenated (700,) arrays.
 
     ``"beginning"`` and ``"end"`` select per-band (first / last *seq_size*
     observations).  ``"middle"`` cuts at the midpoint of the full observation
@@ -81,6 +83,7 @@ def _apply_strategy_to_bands(
     dtype = mag.dtype
     m_total = len(time)
 
+    cut_global = 0
     if strategy == "middle" and m_total > 0:
         cut_global = m_total // 2
     elif strategy == "window" and m_total > 0:
@@ -112,7 +115,10 @@ def _apply_strategy_to_bands(
                 idx = np.sort(rng.choice(m, size=n_sel, replace=False)) if m > 0 else np.array([], dtype=int)
                 mag_sel, time_sel = mag_b[idx], time_b[idx]
             case _:
-                raise ValueError(f"Unknown strategy: {strategy!r}. Expected one of {sorted(_STRATEGIES)}.")
+                raise ValueError(
+                    f"Unknown subsampling method: {strategy!r}. "
+                    f"Expected one of {sorted(_SUBSAMPLING_METHODS)}."
+                )
 
         input_size = len(mag_sel)
         pad_size = seq_size - input_size
@@ -150,11 +156,11 @@ def _preprocess_one(
     magerr: ArrayLike,
     band: ArrayLike,
     *,
-    strategies: list[str],
+    subsampling: list[str],
     rng: np.random.Generator | None,
     presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Pre-process one light curve for every strategy. Returns ``(S, 700, 1)`` tensors."""
+    """Pre-process one light curve for every subsampling method. Returns ``(S, 700, 1)`` tensors."""
     norm_mag = _normalize_mag(mag, magerr).astype(np.float32)
     norm_time = _normalize_time(time).astype(np.float32)
 
@@ -165,7 +171,7 @@ def _preprocess_one(
         band = band[idx]
 
     all_mag, all_time, all_lg_wave, all_mask = [], [], [], []
-    for strategy in strategies:
+    for strategy in subsampling:
         m, t, lw, mk = _apply_strategy_to_bands(norm_mag, norm_time, band, strategy, rng)
         all_mag.append(m)
         all_time.append(t)
@@ -181,10 +187,15 @@ def _preprocess_one(
 
 
 def _is_arrow(obj: Any) -> bool:
+    if hasattr(obj, "__arrow_array__"):
+        return True
     try:
         import pyarrow as pa
 
-        return isinstance(obj, pa.ListArray | pa.ChunkedArray | pa.Table | pa.StructArray)
+        return isinstance(
+            obj,
+            pa.ListArray | pa.LargeListArray | pa.FixedSizeListArray | pa.ChunkedArray,
+        )
     except ImportError:
         return False
 
@@ -236,69 +247,76 @@ class Inputs:
         log10 effective wavelength (Å) for each observation's ZTF band.
     mask : ndarray, shape (N, S, 700)
         Padding mask — ``1`` for padded positions, ``0`` for real observations.
-    n_strategies : int
-        Number of subsampling strategies *S*.
+    n_subsampling : int
+        Number of subsampling methods *S*.
     """
 
     norm_mag: np.ndarray
     norm_time: np.ndarray
     lg_wave: np.ndarray
     mask: np.ndarray
-    n_strategies: int = 1
+    n_subsampling: int = 1
 
 
 def _preprocess_arrow(
-    lcs: pa.ListArray | pa.ChunkedArray | pa.Table | pa.StructArray,
+    lcs: Any,
     field_names: dict[str, str],
     *,
-    strategies: list[str],
+    subsampling: list[str],
     rng: np.random.Generator | None,
     presorted: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Extract per-row slices from an Arrow container and preprocess each."""
     import pyarrow as pa
 
+    if hasattr(lcs, "__arrow_array__") and not isinstance(lcs, pa.Array | pa.ChunkedArray):
+        lcs = pa.array(lcs)
+
     if isinstance(lcs, pa.ChunkedArray):
         lcs = lcs.combine_chunks()
 
-    if isinstance(lcs, pa.ListArray):
-        offsets = lcs.offsets.to_numpy()
-        flat_struct = lcs.values
-        cols = {key: flat_struct.field(arrow_name) for key, arrow_name in field_names.items()}
-    elif isinstance(lcs, pa.Table | pa.StructArray):
-        offsets = None
-        cols = {}
-        for key, arrow_name in field_names.items():
-            col = lcs.column(arrow_name) if isinstance(lcs, pa.Table) else lcs.field(arrow_name)
-            if isinstance(col, pa.ChunkedArray):
-                col = col.combine_chunks()
-            if offsets is None:
-                offsets = col.offsets.to_numpy()
-            cols[key] = col.values
-    else:
+    if not isinstance(lcs, pa.ListArray | pa.LargeListArray | pa.FixedSizeListArray):
         raise TypeError(f"Unsupported Arrow input type: {type(lcs).__name__}")
 
+    cols = {key: lcs.values.field(arrow_name) for key, arrow_name in field_names.items()}
+    null_cols = [key for key, col in cols.items() if col.null_count > 0]
+    if null_cols:
+        raise ValueError(f"Null values found in observation column(s): {null_cols}")
     time_flat = cols["time"].to_numpy(zero_copy_only=False)
     mag_flat = cols["mag"].to_numpy(zero_copy_only=False)
     magerr_flat = cols["magerr"].to_numpy(zero_copy_only=False)
     band_col = cols["band"]
 
+    if isinstance(lcs, pa.FixedSizeListArray):
+        list_size = lcs.type.list_size
+        offsets = range(0, (len(lcs) + 1) * list_size, list_size)
+    else:
+        offsets = lcs.offsets.to_numpy()
+
     singles = []
-    for i in range(len(offsets) - 1):
-        s, e = int(offsets[i]), int(offsets[i + 1])
-        band_i = np.asarray(band_col.slice(s, e - s).to_pylist())
+    for start, end in zip(offsets[:-1], offsets[1:], strict=True):
+        start, end = int(start), int(end)
+        band_i = band_col.slice(start, end - start).to_numpy(zero_copy_only=False)
         singles.append(
             _preprocess_one(
-                time_flat[s:e],
-                mag_flat[s:e],
-                magerr_flat[s:e],
+                time_flat[start:end],
+                mag_flat[start:end],
+                magerr_flat[start:end],
                 band_i,
-                strategies=strategies,
+                subsampling=subsampling,
                 rng=rng,
                 presorted=presorted,
             )
         )
 
+    s = len(subsampling)
+    if len(singles) == 0:
+        return (
+            np.empty((0, s, SEQUENCE_LENGTH, 1), dtype=np.float32),
+            np.empty((0, s, SEQUENCE_LENGTH, 1), dtype=np.float32),
+            np.empty((0, s, SEQUENCE_LENGTH, 1), dtype=np.float32),
+            np.empty((0, s, SEQUENCE_LENGTH), dtype=np.float32),
+        )
     return (
         np.concatenate([s[0][None] for s in singles], axis=0),  # (N, S, 700, 1)
         np.concatenate([s[1][None] for s in singles], axis=0),
@@ -313,7 +331,7 @@ def preprocess_lc(
     magerr: ArrayLike,
     band: ArrayLike,
     *,
-    strategies: str | list[str] = "beginning",
+    subsampling: str | list[str] = "beginning",
     rng: int | np.random.Generator | None = None,
     presorted: bool = False,
 ) -> Inputs:
@@ -322,7 +340,7 @@ def preprocess_lc(
     Applies inverse-variance weighted mean subtraction, time normalisation
     (offset by :data:`MJD_OFFSET`), optional chronological sorting, and
     per-band clipping / zero-padding to produce fixed-length tensors.
-    One set of tensors is produced per entry in ``strategies``.
+    One set of tensors is produced per entry in ``subsampling``.
 
     Parameters
     ----------
@@ -335,9 +353,9 @@ def preprocess_lc(
     band : array-like
         Band labels — each element must be one of ``{"g", "r", "i"}``
         (ZTF photometric bands, see https://www.ztf.caltech.edu).
-    strategies : str or list of str, optional
-        Subsampling strategy or list of strategies applied per band before
-        zero-padding to the fixed sequence length.  Available strategies:
+    subsampling : str or list of str, optional
+        Subsampling method or list of methods applied per band before
+        zero-padding to the fixed sequence length.  Available methods:
 
         - ``"beginning"`` (default): select the chronologically first
           *seq_size* observations in each band independently.
@@ -357,7 +375,7 @@ def preprocess_lc(
           chronologically.  Requires ``rng``.
 
     rng : int, numpy.random.Generator, or None, optional
-        Seed or random number generator used by stochastic strategies
+        Seed or random number generator used by stochastic subsampling methods
         (``"window"`` and ``"sample"``).  An integer is forwarded to
         :func:`numpy.random.default_rng`.  ``None`` picks an unpredictable
         seed.  Default is ``None``.
@@ -369,18 +387,18 @@ def preprocess_lc(
     -------
     Inputs
         Preprocessed tensors with shape ``(1, S, 700, …)`` where *S* is
-        ``len(strategies)``.
+        ``len(subsampling)``.
     """
-    if isinstance(strategies, str):
-        strategies = [strategies]
-    rng = np.random.default_rng(rng) if not _STOCHASTIC_STRATEGIES.isdisjoint(strategies) else None
-    result = _preprocess_one(time, mag, magerr, band, strategies=strategies, rng=rng, presorted=presorted)
+    if isinstance(subsampling, str):
+        subsampling = [subsampling]
+    rng = np.random.default_rng(rng) if not _STOCHASTIC_SUBSAMPLING.isdisjoint(subsampling) else None
+    result = _preprocess_one(time, mag, magerr, band, subsampling=subsampling, rng=rng, presorted=presorted)
     return Inputs(
         result[0][None],  # (1, S, 700, 1)
         result[1][None],
         result[2][None],
         result[3][None],  # (1, S, 700)
-        n_strategies=len(strategies),
+        n_subsampling=len(subsampling),
     )
 
 
@@ -388,7 +406,7 @@ def preprocess_many(
     lcs: Sequence[tuple[ArrayLike, ArrayLike, ArrayLike, ArrayLike]] | Any,
     *,
     field_names: dict[str, str] | None = None,
-    strategies: str | list[str] = "beginning",
+    subsampling: str | list[str] = "beginning",
     rng: int | np.random.Generator | None = None,
     presorted: bool = False,
 ) -> Inputs:
@@ -400,10 +418,11 @@ def preprocess_many(
     Accepts either a sequence of ``(time, mag, magerr, band)`` tuples or a
     PyArrow container.  Supported Arrow layouts:
 
-    * ``pa.ListArray`` / ``pa.ChunkedArray`` with a struct value type
-      (*list-of-struct*): each element is a list of per-observation structs.
-    * ``pa.Table`` / ``pa.StructArray`` where each relevant column is a
-      ``ListArray`` of per-observation values (*struct-of-lists*).
+    * ``pa.ListArray`` / ``pa.LargeListArray`` / ``pa.FixedSizeListArray`` /
+      ``pa.ChunkedArray`` — list-of-struct layout where each element is a list
+      of per-observation structs.
+    * Any object implementing the ``__arrow_array__`` protocol (converted via
+      :func:`pyarrow.array`).
 
     Numeric Arrow columns are extracted as zero-copy NumPy views; the string
     ``band`` column is sliced per-row to avoid full materialisation.
@@ -416,12 +435,12 @@ def preprocess_many(
         Mapping from canonical names (``"time"``, ``"mag"``, ``"magerr"``,
         ``"band"``) to the actual Arrow column / field names.  Only used for
         Arrow inputs; defaults to the canonical names.
-    strategies : str or list of str, optional
-        Subsampling strategy or list of strategies.  See :func:`preprocess_lc`
+    subsampling : str or list of str, optional
+        Subsampling method or list of methods.  See :func:`preprocess_lc`
         for available options.  Default is ``"beginning"``.
     rng : int, numpy.random.Generator, or None, optional
-        Seed or random number generator for stochastic strategies.  See
-        :func:`preprocess_lc`.  Default is ``None``.
+        Seed or random number generator for stochastic subsampling methods.
+        See :func:`preprocess_lc`.  Default is ``None``.
     presorted : bool, optional
         Skip the internal time sort when every light curve is already sorted.
         Default is ``False``.
@@ -430,29 +449,38 @@ def preprocess_many(
     -------
     Inputs
         Preprocessed tensors with shape ``(N, S, 700, …)`` where *N* is the
-        number of light curves and *S* is ``len(strategies)``.
+        number of light curves and *S* is ``len(subsampling)``.
     """
-    if isinstance(strategies, str):
-        strategies = [strategies]
-    rng = np.random.default_rng(rng) if not _STOCHASTIC_STRATEGIES.isdisjoint(strategies) else None
+    if isinstance(subsampling, str):
+        subsampling = [subsampling]
+    rng = np.random.default_rng(rng) if not _STOCHASTIC_SUBSAMPLING.isdisjoint(subsampling) else None
 
     if field_names is not None or _is_arrow(lcs):
         arrays = _preprocess_arrow(
             lcs,
             field_names or _DEFAULT_FIELD_NAMES,
-            strategies=strategies,
+            subsampling=subsampling,
             rng=rng,
             presorted=presorted,
         )
-        return Inputs(*arrays, n_strategies=len(strategies))
+        return Inputs(*arrays, n_subsampling=len(subsampling))
 
-    singles = [_preprocess_one(*lc, strategies=strategies, rng=rng, presorted=presorted) for lc in lcs]
+    singles = [_preprocess_one(*lc, subsampling=subsampling, rng=rng, presorted=presorted) for lc in lcs]
+    n_sub = len(subsampling)
+    if len(singles) == 0:
+        return Inputs(
+            np.empty((0, n_sub, SEQUENCE_LENGTH, 1), dtype=np.float32),
+            np.empty((0, n_sub, SEQUENCE_LENGTH, 1), dtype=np.float32),
+            np.empty((0, n_sub, SEQUENCE_LENGTH, 1), dtype=np.float32),
+            np.empty((0, n_sub, SEQUENCE_LENGTH), dtype=np.float32),
+            n_subsampling=n_sub,
+        )
     return Inputs(
         np.concatenate([s[0][None] for s in singles], axis=0),  # (N, S, 700, 1)
         np.concatenate([s[1][None] for s in singles], axis=0),
         np.concatenate([s[2][None] for s in singles], axis=0),
         np.concatenate([s[3][None] for s in singles], axis=0),  # (N, S, 700)
-        n_strategies=len(strategies),
+        n_subsampling=n_sub,
     )
 
 
@@ -519,10 +547,10 @@ class Infer:
             One 512-d embedding per input light curve per strategy.
         """
         n_lcs = inputs.norm_mag.shape[0]
-        n_strat = inputs.n_strategies
+        n_strat = inputs.n_subsampling
         total = n_lcs * n_strat
 
-        # Flatten the strategy axis so ONNX sees a plain (N*S, 700, 1) batch.
+        # Flatten the subsampling axis so ONNX sees a plain (N*S, 700, 1) batch.
         mag = inputs.norm_mag.reshape(total, SEQUENCE_LENGTH, 1)
         time = inputs.norm_time.reshape(total, SEQUENCE_LENGTH, 1)
         lg = inputs.lg_wave.reshape(total, SEQUENCE_LENGTH, 1)
@@ -537,4 +565,4 @@ class Infer:
                 results.append(_run_session(self._session, mag[sl], time[sl], lg[sl], mask[sl]))
             out = np.concatenate(results, axis=0)
 
-        return out.reshape(n_lcs, n_strat, 512)
+        return out.reshape(n_lcs, n_strat, -1)
