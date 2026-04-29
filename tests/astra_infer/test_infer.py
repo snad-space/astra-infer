@@ -186,7 +186,7 @@ def test_empty_arrow_batch():
 
     empty_struct = pa.StructArray.from_arrays(
         [pa.array([], type=pa.float64())] * 3 + [pa.array([], type=pa.string())],
-        names=["time", "mag", "magerr", "band"],
+        names=["mjd", "mag", "magerr", "band"],
     )
     empty_lcs = pa.ListArray.from_arrays(pa.array([0], type=pa.int32()), empty_struct)
     inputs = preprocess_many(empty_lcs)
@@ -205,10 +205,10 @@ def test_null_observation_values_raise():
             pa.array([0.1] * 3),
             pa.array(["g", "r", "i"]),
         ],
-        names=["time", "mag", "magerr", "band"],
+        names=["mjd", "mag", "magerr", "band"],
     )
     lcs = pa.ListArray.from_arrays(pa.array([0, 3], type=pa.int32()), struct)
-    with pytest.raises(ValueError, match="time"):
+    with pytest.raises(ValueError, match="mjd"):
         preprocess_many(lcs)
 
 
@@ -223,7 +223,7 @@ def test_null_list_element_treated_as_zero_length():
         pa.array([0, 50], type=pa.int32()),
         pa.StructArray.from_arrays(
             [pa.array(lc[0]), pa.array(lc[1]), pa.array(lc[2]), pa.array(lc[3], type=pa.string())],
-            names=["time", "mag", "magerr", "band"],
+            names=["mjd", "mag", "magerr", "band"],
         ),
     )
     # Build a 2-row array: row 0 = null, row 1 = the actual LC
@@ -363,7 +363,7 @@ def _make_list_struct(lcs):
             pa.concat_arrays(all_magerr),
             pa.concat_arrays(all_band),
         ],
-        names=["time", "mag", "magerr", "band"],
+        names=["mjd", "mag", "magerr", "band"],
     )
     return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), flat_struct)
 
@@ -441,7 +441,7 @@ def _make_fixed_size_list_struct(lcs, list_size):
             pa.concat_arrays(all_magerr),
             pa.concat_arrays(all_band),
         ],
-        names=["time", "mag", "magerr", "band"],
+        names=["mjd", "mag", "magerr", "band"],
     )
     return pa.FixedSizeListArray.from_arrays(flat_struct, type=pa.list_(flat_struct.type, list_size))
 
@@ -474,7 +474,7 @@ def test_inputs_from_lcs_arrow_custom_field_names():
     )
     arrow_lcs = pa.ListArray.from_arrays(pa.array([0, n], type=pa.int32()), flat_struct)
 
-    custom_names = {"time": "mjd", "mag": "psf_mag", "magerr": "psf_magerr", "band": "fid"}
+    custom_names = {"mjd": "mjd", "mag": "psf_mag", "magerr": "psf_magerr", "band": "fid"}
     result_arrow = preprocess_many(arrow_lcs, field_names=custom_names)
     result_seq = preprocess_many([(time, mag, magerr, band)])
 
