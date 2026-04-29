@@ -36,24 +36,24 @@ def test_inputs_from_lc_shape(n):
     assert inputs.norm_time.shape == (1, 1, SEQUENCE_LENGTH, 1)
     assert inputs.lg_wave.shape == (1, 1, SEQUENCE_LENGTH, 1)
     assert inputs.mask.shape == (1, 1, SEQUENCE_LENGTH)
-    assert inputs.n_strategies == 1
+    assert inputs.n_subsampling == 1
 
 
 def test_inputs_from_lc_multiple_strategies_shape():
     """preprocess_lc with multiple strategies returns (1, S, 700, 1) tensors."""
     strategies = ["beginning", "end", "middle"]
-    inputs = preprocess_lc(*_make_lc(300, np.random.default_rng(0)), strategies=strategies)
+    inputs = preprocess_lc(*_make_lc(300, np.random.default_rng(0)), subsampling=strategies)
 
     n_strat = len(strategies)
     assert inputs.norm_mag.shape == (1, n_strat, SEQUENCE_LENGTH, 1)
     assert inputs.mask.shape == (1, n_strat, SEQUENCE_LENGTH)
-    assert inputs.n_strategies == n_strat
+    assert inputs.n_subsampling == n_strat
 
 
 def test_inputs_from_lc_single_string_strategy():
     """A single strategy string is accepted and gives S=1."""
-    inputs = preprocess_lc(*_make_lc(100, np.random.default_rng(1)), strategies="end")
-    assert inputs.n_strategies == 1
+    inputs = preprocess_lc(*_make_lc(100, np.random.default_rng(1)), subsampling="end")
+    assert inputs.n_subsampling == 1
     assert inputs.norm_mag.shape == (1, 1, SEQUENCE_LENGTH, 1)
 
 
@@ -81,7 +81,7 @@ def test_inputs_from_lc_presorted():
 @pytest.mark.parametrize("strategy", ["beginning", "end", "middle", "window", "sample"])
 def test_strategy_produces_valid_output(strategy):
     """Every strategy produces finite, correctly shaped tensors."""
-    inputs = preprocess_lc(*_make_lc(400, np.random.default_rng(2)), strategies=strategy, rng=0)
+    inputs = preprocess_lc(*_make_lc(400, np.random.default_rng(2)), subsampling=strategy, rng=0)
     assert inputs.norm_mag.shape == (1, 1, SEQUENCE_LENGTH, 1)
     assert np.all(np.isfinite(inputs.norm_mag[inputs.mask == 0]))
 
@@ -90,16 +90,16 @@ def test_strategy_produces_valid_output(strategy):
 def test_deterministic_strategies_require_no_rng(strategy):
     """Deterministic strategies give identical results regardless of rng."""
     lc = _make_lc(400, np.random.default_rng(3))
-    a = preprocess_lc(*lc, strategies=strategy, rng=0)
-    b = preprocess_lc(*lc, strategies=strategy, rng=99)
+    a = preprocess_lc(*lc, subsampling=strategy, rng=0)
+    b = preprocess_lc(*lc, subsampling=strategy, rng=99)
     np.testing.assert_array_equal(a.norm_mag, b.norm_mag)
 
 
 def test_beginning_end_differ_for_long_lc():
     """'beginning' and 'end' select different time windows for a long LC."""
     lc = _make_lc(800, np.random.default_rng(4))
-    beg = preprocess_lc(*lc, strategies="beginning")
-    end = preprocess_lc(*lc, strategies="end")
+    beg = preprocess_lc(*lc, subsampling="beginning")
+    end = preprocess_lc(*lc, subsampling="end")
     assert not np.array_equal(beg.norm_mag, end.norm_mag)
 
 
@@ -107,24 +107,24 @@ def test_short_lc_end_same_as_beginning():
     """For a short LC (m_band < seq_size for every band), 'end' equals 'beginning'."""
     # 10 obs — far fewer than any per-band seq_size, so last == first per band.
     lc = _make_lc(10, np.random.default_rng(5))
-    beg = preprocess_lc(*lc, strategies="beginning")
-    end = preprocess_lc(*lc, strategies="end")
+    beg = preprocess_lc(*lc, subsampling="beginning")
+    end = preprocess_lc(*lc, subsampling="end")
     np.testing.assert_array_equal(beg.norm_mag, end.norm_mag)
 
 
 def test_window_strategy_reproducible_with_rng():
     """'window' gives identical results when given the same integer seed."""
     lc = _make_lc(800, np.random.default_rng(6))
-    a = preprocess_lc(*lc, strategies="window", rng=42)
-    b = preprocess_lc(*lc, strategies="window", rng=42)
+    a = preprocess_lc(*lc, subsampling="window", rng=42)
+    b = preprocess_lc(*lc, subsampling="window", rng=42)
     np.testing.assert_array_equal(a.norm_mag, b.norm_mag)
 
 
 def test_window_strategy_varies_with_different_rng():
     """'window' generally produces different results for different seeds."""
     lc = _make_lc(800, np.random.default_rng(7))
-    a = preprocess_lc(*lc, strategies="window", rng=0)
-    b = preprocess_lc(*lc, strategies="window", rng=1)
+    a = preprocess_lc(*lc, subsampling="window", rng=0)
+    b = preprocess_lc(*lc, subsampling="window", rng=1)
     # Not guaranteed, but extremely unlikely to be equal for 800 obs.
     assert not np.array_equal(a.norm_mag, b.norm_mag)
 
@@ -132,8 +132,8 @@ def test_window_strategy_varies_with_different_rng():
 def test_sample_strategy_reproducible_with_rng():
     """'sample' gives identical results when given the same integer seed."""
     lc = _make_lc(800, np.random.default_rng(8))
-    a = preprocess_lc(*lc, strategies="sample", rng=0)
-    b = preprocess_lc(*lc, strategies="sample", rng=0)
+    a = preprocess_lc(*lc, subsampling="sample", rng=0)
+    b = preprocess_lc(*lc, subsampling="sample", rng=0)
     np.testing.assert_array_equal(a.norm_mag, b.norm_mag)
 
 
@@ -141,15 +141,98 @@ def test_rng_generator_accepted():
     """An np.random.Generator instance is accepted for rng."""
     lc = _make_lc(400, np.random.default_rng(9))
     rng = np.random.default_rng(10)
-    inputs = preprocess_lc(*lc, strategies=["window", "sample"], rng=rng)
-    assert inputs.n_strategies == 2
+    inputs = preprocess_lc(*lc, subsampling=["window", "sample"], rng=rng)
+    assert inputs.n_subsampling == 2
 
 
 def test_invalid_strategy_raises():
     """An unrecognised strategy name raises ValueError."""
     lc = _make_lc(100, np.random.default_rng(11))
-    with pytest.raises(ValueError, match="Unknown strategy"):
-        preprocess_lc(*lc, strategies="bogus")
+    with pytest.raises(ValueError, match="Unknown subsampling method"):
+        preprocess_lc(*lc, subsampling="bogus")
+
+
+# ---------------------------------------------------------------------------
+# Zero-length inputs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("strategy", ["beginning", "end", "middle", "window", "sample"])
+def test_zero_obs_lc(strategy):
+    """preprocess_lc with 0 observations returns a fully-padded (1,1,700,1) tensor."""
+    inputs = preprocess_lc(
+        np.array([]),
+        np.array([]),
+        np.array([]),
+        np.array([]),
+        subsampling=strategy,
+        rng=0,
+    )
+    assert inputs.norm_mag.shape == (1, 1, SEQUENCE_LENGTH, 1)
+    assert np.all(inputs.mask == 1)
+
+
+def test_empty_sequence_batch():
+    """preprocess_many([]) returns (0, 1, 700, 1) tensors."""
+    inputs = preprocess_many([])
+    assert inputs.norm_mag.shape == (0, 1, SEQUENCE_LENGTH, 1)
+    assert inputs.mask.shape == (0, 1, SEQUENCE_LENGTH)
+    assert inputs.n_subsampling == 1
+
+
+def test_empty_arrow_batch():
+    """preprocess_many with a 0-row Arrow ListArray returns (0, 1, 700, 1) tensors."""
+    import pyarrow as pa
+
+    empty_struct = pa.StructArray.from_arrays(
+        [pa.array([], type=pa.float64())] * 3 + [pa.array([], type=pa.string())],
+        names=["time", "mag", "magerr", "band"],
+    )
+    empty_lcs = pa.ListArray.from_arrays(pa.array([0], type=pa.int32()), empty_struct)
+    inputs = preprocess_many(empty_lcs)
+    assert inputs.norm_mag.shape == (0, 1, SEQUENCE_LENGTH, 1)
+    assert inputs.mask.shape == (0, 1, SEQUENCE_LENGTH)
+
+
+def test_null_observation_values_raise():
+    """Null values inside the flat observation arrays raise ValueError."""
+    import pyarrow as pa
+
+    struct = pa.StructArray.from_arrays(
+        [
+            pa.array([1.0, None, 3.0]),
+            pa.array([1.0, 2.0, 3.0]),
+            pa.array([0.1] * 3),
+            pa.array(["g", "r", "i"]),
+        ],
+        names=["time", "mag", "magerr", "band"],
+    )
+    lcs = pa.ListArray.from_arrays(pa.array([0, 3], type=pa.int32()), struct)
+    with pytest.raises(ValueError, match="time"):
+        preprocess_many(lcs)
+
+
+def test_null_list_element_treated_as_zero_length():
+    """A null element in a ListArray is treated as a zero-length (fully-padded) LC."""
+    import pyarrow as pa
+
+    rng = np.random.default_rng(16)
+    lc = _make_lc(50, rng)
+
+    normal = pa.ListArray.from_arrays(
+        pa.array([0, 50], type=pa.int32()),
+        pa.StructArray.from_arrays(
+            [pa.array(lc[0]), pa.array(lc[1]), pa.array(lc[2]), pa.array(lc[3], type=pa.string())],
+            names=["time", "mag", "magerr", "band"],
+        ),
+    )
+    # Build a 2-row array: row 0 = null, row 1 = the actual LC
+    with_null = pa.concat_arrays([pa.array([None], type=normal.type), normal])
+
+    inputs = preprocess_many(with_null)
+    assert inputs.norm_mag.shape == (2, 1, SEQUENCE_LENGTH, 1)
+    assert np.all(inputs.mask[0] == 1)  # null row is fully padded
+    assert not np.all(inputs.mask[1] == 1)  # real row has observations
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +248,7 @@ def test_inputs_from_lcs_shape():
     stacked = preprocess_many(lcs)
     assert stacked.norm_mag.shape == (3, 1, SEQUENCE_LENGTH, 1)
     assert stacked.mask.shape == (3, 1, SEQUENCE_LENGTH)
-    assert stacked.n_strategies == 1
+    assert stacked.n_subsampling == 1
 
     for i, lc in enumerate(lcs):
         single = preprocess_lc(*lc)
@@ -179,9 +262,9 @@ def test_inputs_from_lcs_multiple_strategies():
     lcs = [_make_lc(200, rng) for _ in range(4)]
     strategies = ["beginning", "end"]
 
-    inputs = preprocess_many(lcs, strategies=strategies)
+    inputs = preprocess_many(lcs, subsampling=strategies)
     assert inputs.norm_mag.shape == (4, 2, SEQUENCE_LENGTH, 1)
-    assert inputs.n_strategies == 2
+    assert inputs.n_subsampling == 2
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +285,7 @@ def test_predict_single(onnx_file, n):
 def test_predict_multiple_strategies(onnx_file):
     """predict returns (1, S, 512) when multiple strategies are used."""
     strategies = ["beginning", "end", "middle"]
-    inputs = preprocess_lc(*_make_lc(400, np.random.default_rng(0)), strategies=strategies)
+    inputs = preprocess_lc(*_make_lc(400, np.random.default_rng(0)), subsampling=strategies)
     embeddings = Infer(onnx_file).predict(inputs)
 
     assert embeddings.shape == (1, len(strategies), 512)
@@ -242,7 +325,7 @@ def test_predict_batch_multi_strategy(onnx_file, n_curves, n_strategies):
     rng = np.random.default_rng(13)
     lcs = [_make_lc(300, rng) for _ in range(n_curves)]
 
-    inputs = preprocess_many(lcs, strategies=strategies, rng=42)
+    inputs = preprocess_many(lcs, subsampling=strategies, rng=42)
     embeddings = Infer(onnx_file).predict(inputs)
 
     assert embeddings.shape == (n_curves, n_strategies, 512)
@@ -279,27 +362,12 @@ def _make_list_struct(lcs):
     return pa.ListArray.from_arrays(pa.array(offsets, type=pa.int32()), flat_struct)
 
 
-def _make_table(lcs):
-    """Build a pa.Table (struct-of-lists) from a list of (time, mag, magerr, band) tuples."""
-    import pyarrow as pa
-
-    times, mags, magerrs, bands = zip(*lcs, strict=True)
-    return pa.table(
-        {
-            "time": pa.array([list(t) for t in times]),
-            "mag": pa.array([list(m) for m in mags]),
-            "magerr": pa.array([list(me) for me in magerrs]),
-            "band": pa.array([list(b) for b in bands]),
-        }
-    )
-
-
 # ---------------------------------------------------------------------------
 # Arrow tests
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("make_arrow", [_make_list_struct, _make_table], ids=["list_struct", "table"])
+@pytest.mark.parametrize("make_arrow", [_make_list_struct], ids=["list_struct"])
 def test_inputs_from_lcs_arrow_matches_sequence(make_arrow):
     """preprocess_many with Arrow input matches sequence-of-tuples result."""
     rng = np.random.default_rng(5)
@@ -327,6 +395,63 @@ def test_inputs_from_lcs_arrow_chunked():
     result_arrow = preprocess_many(chunked)
 
     np.testing.assert_array_equal(result_seq.norm_mag, result_arrow.norm_mag)
+
+
+def test_inputs_from_lcs_arrow_nonzero_first_offset():
+    """preprocess_many handles a sliced ListArray where offsets[0] != 0."""
+
+    rng = np.random.default_rng(14)
+    lcs = [_make_lc(n, rng) for n in [50, 100, 200]]
+
+    full = _make_list_struct(lcs)
+    sliced = full.slice(1)  # offsets[0] == offset of second original row, != 0
+
+    result_seq = preprocess_many(lcs[1:])
+    result_arrow = preprocess_many(sliced)
+
+    np.testing.assert_array_equal(result_seq.norm_mag, result_arrow.norm_mag)
+    np.testing.assert_array_equal(result_seq.mask, result_arrow.mask)
+
+
+def _make_fixed_size_list_struct(lcs, list_size):
+    """Build a pa.FixedSizeListArray (fixed-size-list-of-struct) padding each LC to list_size."""
+    import pyarrow as pa
+
+    all_time, all_mag, all_magerr, all_band = [], [], [], []
+    for time, mag, magerr, band in lcs:
+        n = len(time)
+        pad = list_size - n
+        all_time.append(pa.concat_arrays([pa.array(time), pa.array(np.zeros(pad))]))
+        all_mag.append(pa.concat_arrays([pa.array(mag), pa.array(np.zeros(pad))]))
+        all_magerr.append(pa.concat_arrays([pa.array(magerr), pa.array(np.full(pad, 0.1))]))
+        all_band.append(
+            pa.concat_arrays([pa.array(band, type=pa.string()), pa.array(["g"] * pad, type=pa.string())])
+        )
+
+    flat_struct = pa.StructArray.from_arrays(
+        [
+            pa.concat_arrays(all_time),
+            pa.concat_arrays(all_mag),
+            pa.concat_arrays(all_magerr),
+            pa.concat_arrays(all_band),
+        ],
+        names=["time", "mag", "magerr", "band"],
+    )
+    return pa.FixedSizeListArray.from_arrays(flat_struct, type=pa.list_(flat_struct.type, list_size))
+
+
+def test_inputs_from_lcs_arrow_fixed_size_list():
+    """preprocess_many handles a FixedSizeListArray with correct row count."""
+
+    rng = np.random.default_rng(15)
+    list_size = 50
+    lcs = [_make_lc(list_size, rng) for _ in range(3)]
+
+    result_seq = preprocess_many(lcs)
+    result_arrow = preprocess_many(_make_fixed_size_list_struct(lcs, list_size))
+
+    np.testing.assert_array_equal(result_seq.norm_mag, result_arrow.norm_mag)
+    np.testing.assert_array_equal(result_seq.mask, result_arrow.mask)
 
 
 def test_inputs_from_lcs_arrow_custom_field_names():
