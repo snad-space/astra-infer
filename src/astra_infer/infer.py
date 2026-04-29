@@ -29,7 +29,7 @@ LG_EFF_WAVE = {"g": np.log10(4746.48), "r": np.log10(6366.38), "i": np.log10(782
 """log10 effective wavelength (Å) for each ZTF band."""
 assert list(BANDS) == list(LG_EFF_WAVE.keys())
 
-_DEFAULT_FIELD_NAMES: dict[str, str] = {"time": "time", "mag": "mag", "magerr": "magerr", "band": "band"}
+_DEFAULT_FIELD_NAMES: dict[str, str] = {"mjd": "mjd", "mag": "mag", "magerr": "magerr", "band": "band"}
 
 _SUBSAMPLING_METHODS = frozenset({"beginning", "end", "middle", "window", "sample"})
 _STOCHASTIC_SUBSAMPLING = frozenset({"window", "sample"})
@@ -282,7 +282,7 @@ def _preprocess_arrow(
     null_cols = [key for key, col in cols.items() if col.null_count > 0]
     if null_cols:
         raise ValueError(f"Null values found in observation column(s): {null_cols}")
-    time_flat = cols["time"].to_numpy(zero_copy_only=False)
+    mjd_flat = cols["mjd"].to_numpy(zero_copy_only=False)
     mag_flat = cols["mag"].to_numpy(zero_copy_only=False)
     magerr_flat = cols["magerr"].to_numpy(zero_copy_only=False)
     band_col = cols["band"]
@@ -299,7 +299,7 @@ def _preprocess_arrow(
         band_i = band_col.slice(start, end - start).to_numpy(zero_copy_only=False)
         singles.append(
             _preprocess_one(
-                time_flat[start:end],
+                mjd_flat[start:end],
                 mag_flat[start:end],
                 magerr_flat[start:end],
                 band_i,
@@ -326,7 +326,7 @@ def _preprocess_arrow(
 
 
 def preprocess_lc(
-    time: ArrayLike,
+    mjd: ArrayLike,
     mag: ArrayLike,
     magerr: ArrayLike,
     band: ArrayLike,
@@ -344,8 +344,8 @@ def preprocess_lc(
 
     Parameters
     ----------
-    time : array-like
-        Observation times (MJD).
+    mjd : array-like
+        Observation times in Modified Julian Date.  ``float64`` is recommended.
     mag : array-like
         PSF magnitudes.
     magerr : array-like
@@ -392,7 +392,7 @@ def preprocess_lc(
     if isinstance(subsampling, str):
         subsampling = [subsampling]
     rng = np.random.default_rng(rng) if not _STOCHASTIC_SUBSAMPLING.isdisjoint(subsampling) else None
-    result = _preprocess_one(time, mag, magerr, band, subsampling=subsampling, rng=rng, presorted=presorted)
+    result = _preprocess_one(mjd, mag, magerr, band, subsampling=subsampling, rng=rng, presorted=presorted)
     return Inputs(
         result[0][None],  # (1, S, 700, 1)
         result[1][None],
@@ -415,7 +415,7 @@ def preprocess_many(
     Applies the same per-curve preprocessing as :func:`preprocess_lc` to each
     light curve, then stacks the results along the batch axis.
 
-    Accepts either a sequence of ``(time, mag, magerr, band)`` tuples or a
+    Accepts either a sequence of ``(mjd, mag, magerr, band)`` tuples or a
     PyArrow container.  Supported Arrow layouts:
 
     * ``pa.ListArray`` / ``pa.LargeListArray`` / ``pa.FixedSizeListArray`` /
@@ -429,10 +429,10 @@ def preprocess_many(
 
     Parameters
     ----------
-    lcs : sequence of (time, mag, magerr, band) tuples, or Arrow container
-        One light curve per element / row.
+    lcs : sequence of (mjd, mag, magerr, band) tuples, or Arrow container
+        One light curve per element / row.  ``float64`` is recommended for MJD.
     field_names : dict[str, str] or None, optional
-        Mapping from canonical names (``"time"``, ``"mag"``, ``"magerr"``,
+        Mapping from canonical names (``"mjd"``, ``"mag"``, ``"magerr"``,
         ``"band"``) to the actual Arrow column / field names.  Only used for
         Arrow inputs; defaults to the canonical names.
     subsampling : str or list of str, optional
