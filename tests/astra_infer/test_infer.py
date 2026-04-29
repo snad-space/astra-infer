@@ -272,6 +272,12 @@ def test_inputs_from_lcs_multiple_strategies():
 # ---------------------------------------------------------------------------
 
 
+def test_predict_empty_batch(onnx_file):
+    """predict on an empty Inputs returns (0, 1, 512) without error."""
+    embeddings = Infer(onnx_file).predict(preprocess_many([]))
+    assert embeddings.shape == (0, 1, 512)
+
+
 @pytest.mark.parametrize("n", [32, 4098])
 def test_predict_single(onnx_file, n):
     """predict returns (1, 1, 512) finite embeddings for a single LC."""
