@@ -550,6 +550,9 @@ class Infer:
         n_strat = inputs.n_subsampling
         total = n_lcs * n_strat
 
+        if total == 0:
+            return np.empty((n_lcs, n_strat, 512), dtype=np.float32)
+
         # Flatten the subsampling axis so ONNX sees a plain (N*S, 700, 1) batch.
         mag = inputs.norm_mag.reshape(total, SEQUENCE_LENGTH, 1)
         time = inputs.norm_time.reshape(total, SEQUENCE_LENGTH, 1)
