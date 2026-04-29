@@ -537,4 +537,4 @@ class Infer:
                 results.append(_run_session(self._session, mag[sl], time[sl], lg[sl], mask[sl]))
             out = np.concatenate(results, axis=0)
 
-        return out.reshape(n_lcs, n_strat, 512)
+        return out.reshape(n_lcs, n_strat, -1)
