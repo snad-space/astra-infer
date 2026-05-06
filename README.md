@@ -32,6 +32,26 @@ Pre-processing steps:
 pip install astra_infer
 ```
 
+`astra_infer` does **not** install an ONNX runtime automatically, because the
+right package depends on your hardware.  Install one separately before calling
+`Infer`:
+
+| Hardware | Package |
+|----------|---------|
+| CPU | `pip install onnxruntime` |
+| NVIDIA GPU (CUDA) | `pip install onnxruntime-gpu` |
+| Apple Silicon / macOS | `pip install onnxruntime-silicon` |
+| Windows DirectML | `pip install onnxruntime-directml` |
+
+See [onnxruntime.ai](https://onnxruntime.ai) for the full list of packages and
+installation options.
+
+Alternatively, the `onnx` extra installs the CPU variant for you:
+
+```bash
+pip install "astra_infer[onnx]"
+```
+
 ## Quick start
 
 ```python
