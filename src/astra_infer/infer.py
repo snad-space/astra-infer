@@ -3,7 +3,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import onnxruntime as ort
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -197,7 +200,7 @@ def _is_arrow(obj: Any) -> bool:
 
 
 def _run_session(
-    session: Any,
+    session: ort.InferenceSession,
     norm_mag: np.ndarray,
     norm_time: np.ndarray,
     lg_wave: np.ndarray,
@@ -511,7 +514,7 @@ class Infer:
         *,
         providers: list[str] | None = None,
         provider_options: list[dict] | None = None,
-        sess_options: Any | None = None,
+        sess_options: ort.SessionOptions | None = None,
     ) -> None:
         try:
             import onnxruntime as ort
