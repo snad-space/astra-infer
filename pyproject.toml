@@ -19,7 +19,6 @@ dynamic = ["version"]
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
-    "onnxruntime",
 ]
 
 [project.urls]
@@ -27,9 +26,12 @@ dependencies = [
 
 # On a mac, install optional dependencies with `pip install '.[dev]'` (include the single quotes)
 [project.optional-dependencies]
+# CPU-only onnxruntime; for GPU install onnxruntime-gpu (or another variant) manually.
+onnx = ["onnxruntime"]
 dev = [
     "asv[virtualenv]==0.6.5", # Used to compute performance benchmarks
     "jupyter", # Clears output from Jupyter notebooks
+    "onnxruntime",
     "pre-commit", # Used to run checks before finalizing a git commit
     "pyarrow",
     "pytest",

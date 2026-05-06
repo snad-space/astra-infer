@@ -3,14 +3,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
-import onnxruntime as ort
 from numpy.typing import ArrayLike
-
-if TYPE_CHECKING:
-    pass
 
 BANDS = np.array(["g", "r", "i"])
 """ZTF photometric bands accepted by the model."""
@@ -201,7 +197,7 @@ def _is_arrow(obj: Any) -> bool:
 
 
 def _run_session(
-    session: ort.InferenceSession,
+    session: Any,
     norm_mag: np.ndarray,
     norm_time: np.ndarray,
     lg_wave: np.ndarray,
@@ -515,8 +511,17 @@ class Infer:
         *,
         providers: list[str] | None = None,
         provider_options: list[dict] | None = None,
-        sess_options: ort.SessionOptions | None = None,
+        sess_options: Any | None = None,
     ) -> None:
+        try:
+            import onnxruntime as ort
+        except ImportError as e:
+            raise ImportError(
+                "onnxruntime is required to run inference. "
+                "Install it with: pip install onnxruntime\n"
+                "For GPU support use: pip install onnxruntime-gpu\n"
+                "See https://onnxruntime.ai for other variants (DirectML, ROCm, etc.)."
+            ) from e
         self._session = ort.InferenceSession(
             onnx_file,
             sess_options=sess_options,
