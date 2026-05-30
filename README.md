@@ -1,10 +1,7 @@
-
 # astra_infer
 
-Python package for running inference with Astra light-curve embedding models.
-Given a multi-band photometric light curve (magnitudes, times, and band labels),
-the package pre-processes the data and runs it through an ONNX embedding model,
-returning a 512-dimensional embedding vector.
+Python package for running inference with **ASTRA** light-curve embedding models.
+Given a multi-band photometric light curve (magnitudes, magnitude errors, times, and band labels), the package pre-processes the data and runs it through an ONNX embedding model, returning a 512-dimensional embedding vector.
 
 [![PyPI](https://img.shields.io/pypi/v/astra_infer?color=blue&logo=pypi&logoColor=white)](https://pypi.org/project/astra_infer/)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/snad-space/astra_infer/smoke-test.yml)](https://github.com/snad-space/astra_infer/actions/workflows/smoke-test.yml)
@@ -12,13 +9,24 @@ returning a 512-dimensional embedding vector.
 [![Read The Docs](https://img.shields.io/readthedocs/astra-infer)](https://astra-infer.readthedocs.io/)
 [![Benchmarks](https://img.shields.io/github/actions/workflow/status/snad-space/astra_infer/asv-main.yml?label=benchmarks)](https://snad-space.github.io/astra_infer/)
 
+---
+
+## 🌐 The ASTRA Ecosystem
+The ASTRA project is split across four distinct repositories:
+
+| Repository | Description | Link |
+| :--- | :--- | :--- |
+| **Development Code** | Core framework, data pipeline, and model training. | [GitHub: astra](https://github.com/TorshaMajumder/astra) |
+| **Inference Code** | Lightweight, production-ready inference scripts and utilities (This Repo). | *[Current Repository]* |
+| **Astronomy Dataset** | Light curve datasets formatted for ASTRA. | [Hugging Face: Dataset](https://huggingface.co/datasets/snad-space/astra-zubercaldr16_gaiadr3vclassre) |
+| **Model Weights & ONNX** | Pre-trained & finetuned model checkpoints along with ONNX exports. | [Hugging Face: Models](https://huggingface.co/ashrot/astra-clr-base) |
+
+---
+
 ## Overview
 
-The model is designed for photometry from the
-[Zwicky Transient Facility (ZTF)](https://www.ztf.caltech.edu) in three bands:
-**g**, **r**, and **i**.  Each call pre-processes the raw observations into
-fixed-length band sequences (300 g + 350 r + 50 i = 700 total), then runs the
-ONNX model to produce a 512-dimensional embedding.
+The model is designed for photometry from the Zwicky Transient Facility (ZTF; [Bellm et al., 2019](https://ui.adsabs.harvard.edu/abs/2019PASP..131a8002B/abstract)) [Zubercal DR16](http://atua.caltech.edu/ZTF/Zubercal.html) catalog in three bands:
+**g**, **r**, and **i**. Each call pre-processes the raw observations into fixed-length band sequences (300 g + 350 r + 50 i = 700 total), then runs the ONNX model to produce a 512-dimensional embedding.
 
 Pre-processing steps:
 1. Inverse-variance weighted mean subtraction of magnitudes.
@@ -26,15 +34,15 @@ Pre-processing steps:
 3. Chronological sorting (can be skipped if input is already sorted).
 4. Per-band clipping / zero-padding to the target sequence length.
 
+---
+
 ## Installation
 
 ```bash
 pip install astra_infer
 ```
 
-`astra_infer` does **not** install an ONNX runtime automatically, because the
-right package depends on your hardware.  Install one separately before calling
-`Infer`:
+`astra_infer` does **not** install an ONNX runtime automatically, because the right package depends on your hardware. Install one separately before calling `Infer`:
 
 | Hardware | Package |
 |----------|---------|
@@ -43,8 +51,7 @@ right package depends on your hardware.  Install one separately before calling
 | Apple Silicon / macOS | `pip install onnxruntime-silicon` |
 | Windows DirectML | `pip install onnxruntime-directml` |
 
-See [onnxruntime.ai](https://onnxruntime.ai) for the full list of packages and
-installation options.
+See [onnxruntime.ai](https://onnxruntime.ai) for the full list of packages and installation options.
 
 Alternatively, the `onnx` extra installs the CPU variant for you:
 
@@ -52,11 +59,16 @@ Alternatively, the `onnx` extra installs the CPU variant for you:
 pip install "astra_infer[onnx]"
 ```
 
+---
+
 ## Quick start
+
+To load your model, you need the pre-trained `.onnx` file. You can download it manually from our [Hugging Face Models Repository](https://huggingface.co/ashrot/astra-clr-base) 
 
 ```python
 import numpy as np
 from astra_infer import Infer, preprocess_lc
+
 
 # Load the model once — the ONNX session is kept alive for repeated calls
 model = Infer("path/to/model.onnx")
@@ -72,11 +84,11 @@ If your observations are already sorted by time you can skip the internal sort:
 inputs = preprocess_lc(time, mag, magerr, band, presorted=True)
 ```
 
+---
+
 ## Subsampling strategies
 
-Apply one or more subsampling strategies to select a window of observations
-per band before padding.  `predict` always returns a 3-D array
-``(N, S, 512)`` — one embedding per light curve per strategy.
+Apply one or more subsampling strategies to select a window of observations per band before padding. `predict` always returns a 3-D array ``(N, S, 512)`` — one embedding per light curve per strategy.
 
 ```python
 # Single strategy (default: "beginning")
@@ -101,6 +113,8 @@ Available strategies:
 | `"middle"` | Global cut at the midpoint of all observations; per-band window of *N* centred around it |
 | `"window"` | Global cut drawn uniformly from a valid range; per-band window of *N* centred around it |
 | `"sample"` | Per-band random subsample without replacement |
+
+---
 
 ## Batch inference
 
@@ -133,6 +147,8 @@ inputs = preprocess_many(
 )
 ```
 
+---
+
 ## Input format
 
 | Array    | Shape  | Description                                                    |
@@ -142,9 +158,12 @@ inputs = preprocess_many(
 | `magerr` | (n,)   | 1-σ magnitude uncertainties (any numeric dtype)                |
 | `band`   | (n,)   | ZTF band labels — each element in `{"g","r","i"}` (see [ZTF](https://www.ztf.caltech.edu)) |
 
+---
+
 ## Development
 
 ```bash
 pip install -e ".[dev]"
 pytest
 ```
+
