@@ -16,6 +16,7 @@ https://asv.readthedocs.io/en/stable/writing_benchmarks.html.
 """
 
 import numpy as np
+
 from astra_infer.infer import BANDS, _apply_strategy_to_bands, _normalize_mag, _normalize_time, preprocess_lc
 
 _N_OBS = [32, 700, 4096]

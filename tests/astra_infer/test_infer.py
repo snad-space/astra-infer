@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+
 from astra_infer.infer import (
     BANDS,
     SEQUENCE_LENGTH,
